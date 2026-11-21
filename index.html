@@ -2087,10 +2087,13 @@ function avisosInicio(c) {
       '<div class="acciones"><button class="btn prim" data-a="archivoNuevo">Crear archivo</button><button class="btn" data-a="vincular">Abrir uno</button></div></div></div>';
   }
   const base = ui.ultimoRespaldo || estado.creado_en || Date.now();
-  if (conDatos && Date.now() - base > 7 * MS_DIA) {
+  /* Sin archivo conectable (iPhone, Firefox…) el respaldo es manual: se recuerda antes. */
+  const sinArchivo = !P.hayApiArchivos(), compartible = typeof navigator !== "undefined" && !!navigator.share;
+  if (conDatos && Date.now() - base > (sinArchivo ? 3 : 7) * MS_DIA) {
     const dias = Math.floor((Date.now() - base) / MS_DIA);
     h += '<div class="nota"><div class="cuerpo"><b>' + (ui.ultimoRespaldo ? "Van " + dias + " días sin respaldo" : "Aún no hay respaldo fuera del navegador") +
-      '</b><span class="pequeno">Solo cuentan las escrituras al archivo conectado y las exportaciones.</span><div class="acciones"><button class="btn prim" data-a="exportar">Exportar respaldo</button>' +
+      '</b><span class="pequeno">' + (sinArchivo && compartible ? "Toca «Guardar respaldo» y elige «Guardar en Archivos» o iCloud Drive. Si algo le pasa a la app, de ahí recuperas todo." : "Solo cuentan las escrituras al archivo conectado y las exportaciones.") + '</span><div class="acciones">' +
+      (sinArchivo && compartible ? '<button class="btn prim" data-a="compartir">Guardar respaldo</button>' : '<button class="btn prim" data-a="exportar">Exportar respaldo</button>') +
       (P.hayApiArchivos() && !P.archivo() ? '<button class="btn" data-a="archivoNuevo">Conectar archivo</button>' : "") + "</div></div></div>";
   }
   if (ui.persistente === false && !ui.ocultarPersist && !P.archivo() && !P.pendiente() && !P.hayApiArchivos()) {
@@ -2592,9 +2595,9 @@ function vAjustes() {
     if (P.archivo()) h += '<div class="par"><button class="btn" data-a="probarArchivo">Probar el archivo</button><button class="btn" data-a="desvincular">Desconectar</button></div>';
     else if (P.pendiente()) h += '<button class="btn prim ancho" data-a="reconectar">Reconectar ' + esc(P.pendiente().name || "archivo") + '</button><button class="btn ancho" data-a="desvincular">Olvidar este archivo</button>';
     else h += '<span class="pequeno tenue">Conecta un archivo .json: cada cambio se escribe ahí. Es el respaldo de verdad, porque el navegador puede borrar sus datos.</span><div class="par"><button class="btn prim" data-a="archivoNuevo">Crear archivo</button><button class="btn" data-a="vincular">Abrir existente</button></div>';
-  } else h += '<span class="pequeno tenue">Este navegador no permite conectar archivos: usa Exportar para guardar respaldos.</span>';
+  } else h += '<span class="pequeno tenue">' + (PWA.ios ? "En iPhone ningún navegador puede escribir solo en un archivo: el respaldo lo guardas tú. Toca «" + BOTON_RESPALDO() + "» y guárdalo en Archivos o iCloud Drive." : "Este navegador no permite conectar archivos: usa Exportar para guardar respaldos.") + "</span>";
   h += '<div class="par"><button class="btn" data-a="exportar">Exportar respaldo</button><label class="btn">Importar<input type="file" accept=".json,application/json" class="oculto" data-c="importar"></label></div>';
-  if (typeof navigator !== "undefined" && navigator.share) h += '<button class="btn ancho" data-a="compartir">Compartir respaldo…</button>';
+  if (typeof navigator !== "undefined" && navigator.share) h += PWA.ios && !P.hayApiArchivos() ? '<button class="btn prim ancho" data-a="compartir">Guardar respaldo en Archivos o iCloud…</button>' : '<button class="btn ancho" data-a="compartir">Compartir respaldo…</button>';
   h += '<button class="btn ancho" data-a="diagnostico">Diagnóstico del guardado</button>';
   h += '<span class="mini tenue">Último respaldo fuera del navegador: ' + (ui.ultimoRespaldo ? esc(new Date(ui.ultimoRespaldo).toLocaleString("es")) : "nunca") + ". La exportación incluye las fotos.</span>";
   h += '<span class="mini tenue">Almacenamiento persistente: ' + (ui.persistente === true ? "concedido" : ui.persistente === false ? "no concedido (Chrome puede borrar los datos si falta espacio)" : "no disponible en este navegador") + ".</span>";
@@ -2603,8 +2606,9 @@ function vAjustes() {
     h += '<section class="tarjeta col"><h2>App</h2><span class="pequeno">' + (PWA.instalada ? "Instalada en este teléfono." : "Abierta en el navegador, sin instalar.") + " Versión " + esc(VERSION_APP) + ".</span>";
     if (PWA.nueva) h += '<button class="btn prim ancho" data-a="pwaActualizar">Actualizar a la versión nueva</button>';
     if (!PWA.instalada && PWA.aviso) h += '<button class="btn prim ancho" data-a="pwaInstalar">Instalar Rutina</button>';
-    else if (!PWA.instalada) h += '<span class="mini tenue">Para instalarla: menú ⋮ de Chrome → «Agregar a la pantalla principal» o «Instalar app».</span>';
-    h += '<span class="mini tenue">Instalada, abre sin internet y Chrome cuida mejor sus datos. Actualizar no toca tus registros.</span></section>';
+    else if (!PWA.instalada) h += '<span class="mini tenue">' + (PWA.ios ? "Para instalarla: botón Compartir (cuadro con flecha) → «Agregar a pantalla de inicio»." : "Para instalarla: menú ⋮ de Chrome → «Instalar app» o «Agregar a la pantalla principal».") + "</span>";
+    if (PWA.ios) h += '<span class="mini tenue"><b>Ojo:</b> en iPhone, si quitas el ícono de Rutina se borran sus datos. Guarda respaldos en Archivos o iCloud.</span>';
+    h += '<span class="mini tenue">Instalada, abre sin internet y el navegador cuida mejor sus datos. Actualizar no toca tus registros.</span></section>';
   }
   h += '<section class="tarjeta col" style="gap:12px"><h2>Constancia y progresión</h2><div class="campo"><span>Días habituales</span><div class="chips dias">' + L.DIAS_CORTOS.map((d, i) => '<button class="chip" data-a="diaHab" data-d="' + (i + 1) + '" aria-pressed="' + (aj.dias_habituales.indexOf(i + 1) >= 0) + '" aria-label="' + L.NOMBRES_DIA[i] + '">' + d + "</button>").join("") + "</div></div>" +
     ajusteNum("aviso_dias", "Aviso desde", aj.aviso_dias + " días habituales sin ir", "Sale en Inicio.") +
@@ -3029,12 +3033,14 @@ function vBienvenida() {
       '<label class="campo" style="font-size:15px">Peso inicial (kg)<input class="entrada num" ' + grande + ' id="bv-peso" inputmode="decimal" enterkeyhint="next" placeholder="Ej. 78,5" data-enter="bvPeso" data-enfocar value="' + (pf.peso_inicial ? esc(L.kg(pf.peso_inicial)) : "") + '"></label>' +
       '<p class="error" id="bv-error" role="alert"></p><button class="btn prim grande" data-a="bvPeso">Siguiente</button><button class="btn texto ancho" data-a="bvPaso" data-p="3">Omitir por ahora</button><button class="btn texto ancho" data-a="bvPaso" data-p="1">Atrás</button>';
   } else {
-    h += '<div class="col" style="gap:4px"><h1 style="margin:0;font-size:28px">¿Dónde guardas tus datos?</h1><span class="tenue">Todo se guarda al instante en este teléfono, pero Chrome no garantiza conservarlo. Un archivo .json es tu respaldo de verdad.</span></div>';
+    h += '<div class="col" style="gap:4px"><h1 style="margin:0;font-size:28px">¿Dónde guardas tus datos?</h1><span class="tenue">Todo se guarda al instante en este teléfono, pero el navegador no garantiza conservarlo. ' + (api ? "Un archivo .json es tu respaldo de verdad." : "Un respaldo guardado fuera de la app es tu seguro.") + "</span></div>";
     if (api) h += '<button class="opcion prim" data-a="bvCrear"><span class="txt"><b style="font-size:17px">Crear un archivo nuevo</b><small>' + esc(L.nombreArchivo(estado, false)) + ' · se actualiza solo</small></span>' + ic("der") + "</button>" +
       '<button class="opcion" data-a="bvAbrir"><span class="txt"><b>Abrir uno que ya tengo</b><small class="tenue">Si tiene datos, se cargan</small></span></button>' +
       '<span class="mini tenue">Al reabrir la app, Chrome pide un toque en «Reconectar» para volver a escribir en el archivo.</span>';
+    else if (PWA.ios) h += '<div class="nota suave"><div class="cuerpo"><b>En iPhone, el respaldo lo guardas tú</b><span class="pequeno">Ningún navegador del iPhone puede escribir solo en un archivo. De vez en cuando toca Ajustes → «' + BOTON_RESPALDO() + '» y guárdalo en Archivos (o iCloud Drive). Rutina te lo recordará.</span></div></div>' +
+      '<div class="nota"><div class="cuerpo"><b>No quites el ícono de Rutina</b><span class="pequeno">En iPhone, quitarlo borra sus datos. Con un respaldo en Archivos o iCloud los recuperas con «Importar».</span></div></div>';
     else h += '<div class="nota suave"><div class="cuerpo"><b>Este navegador no permite conectar archivos</b><span class="pequeno">Usa «Exportar respaldo» en Ajustes de vez en cuando.</span></div></div>';
-    h += '<button class="btn ancho" style="height:52px" data-a="bvFin">Por ahora, solo en este teléfono</button><button class="btn texto ancho" data-a="bvPaso" data-p="2">Atrás</button>';
+    h += '<button class="btn ' + (api ? "" : "prim ") + 'ancho" style="height:52px" data-a="bvFin">' + (api ? "Por ahora, solo en este teléfono" : "Empezar") + '</button><button class="btn texto ancho" data-a="bvPaso" data-p="2">Atrás</button>';
   }
   return h + "</main>";
 }
@@ -3181,9 +3187,15 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "10394d4238"; /*VERSION-APP*/
+const VERSION_APP = "2255a8d207"; /*VERSION-APP*/
+/* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin archivo
+   conectado (no existe la API), sin botón propio de instalar y, si se quita el ícono, se borran los
+   datos. iPadOS se presenta como Mac: se reconoce por la pantalla táctil. */
+const ES_IOS = (() => { try { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); } catch (e) { return false; } })();
+/* Nombre del botón de respaldo que de verdad se ve: «Guardar respaldo» (menú Compartir) o «Exportar respaldo». */
+const BOTON_RESPALDO = () => (typeof navigator !== "undefined" && navigator.share ? "Guardar respaldo" : "Exportar respaldo");
 const PWA = {
-  servida: /^https?:$/.test(location.protocol) && !DEMO && "serviceWorker" in navigator,
+  servida: /^https?:$/.test(location.protocol) && !DEMO, ios: ES_IOS,
   instalada: false, aviso: null, nueva: null, sw: "sin registrar", recargando: false
 };
 /* Repintar sin pisar lo que se está escribiendo ni antes de cargar los datos. */
@@ -3196,6 +3208,7 @@ function avisosPwa() {
   if (!PWA.servida) return "";
   let h = "";
   if (PWA.nueva) h += '<div class="nota suave"><div class="cuerpo"><b>Hay una versión nueva de Rutina</b><span class="pequeno">Actualizar no toca tus registros.</span><div class="acciones"><button class="btn prim" data-a="pwaActualizar">Actualizar</button></div></div></div>';
+  if (!PWA.instalada && PWA.ios && !ui.ocultarInstalar) h += '<div class="nota suave"><div class="cuerpo"><b>Instala Rutina en tu iPhone</b><span class="pequeno">Toca <b>Compartir</b> (el cuadro con la flecha hacia arriba) y luego «Agregar a pantalla de inicio». Instalada abre sin internet y el iPhone no borra sus datos por dejar de usarla. Instálala antes de empezar: lo que anotes en el navegador no pasa a la app instalada.</span></div><button class="icono" data-a="ocultarInstalar" aria-label="Ocultar">' + ic("x", 18) + "</button></div>";
   if (!PWA.instalada && PWA.aviso && !ui.ocultarInstalar) h += '<div class="nota suave"><div class="cuerpo"><b>Instala Rutina</b><span class="pequeno">Queda con su ícono, abre sin internet y Chrome cuida mejor tus datos.</span><div class="acciones"><button class="btn prim" data-a="pwaInstalar">Instalar</button></div></div><button class="icono" data-a="ocultarInstalar" aria-label="Ocultar">' + ic("x", 18) + "</button></div>";
   return h;
 }
@@ -3204,6 +3217,7 @@ function iniciarPwa() {
   if (!PWA.servida) return;
   try { matchMedia("(display-mode: standalone)").addEventListener("change", () => { verInstalada(); repintarPwa(); }); } catch (e) {}
   window.addEventListener("beforeinstallprompt", (ev) => { ev.preventDefault(); PWA.aviso = ev; repintarPwa(); });
+  if (!("serviceWorker" in navigator)) { PWA.sw = "no disponible en este navegador"; return; }
   window.addEventListener("appinstalled", () => { PWA.aviso = null; PWA.instalada = true; toast("Rutina quedó instalada"); pedirPersistencia(); });
   const marcarNueva = (w) => { if (w && navigator.serviceWorker.controller) { PWA.nueva = w; repintarPwa(); } };
   navigator.serviceWorker.register("sw.js").then((reg) => {
