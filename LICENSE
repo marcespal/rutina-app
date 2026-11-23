@@ -1,0 +1,14 @@
+Rutina — registro de gimnasio
+Copyright (c) 2026 Marcelo Espinosa. Todos los derechos reservados.
+
+El código, el diseño, los textos y los videos de Rutina son propiedad de su autor.
+Puedes usar la app publicada en https://marcespal.github.io/rutina-app/ para tu
+uso personal. No está permitido copiar, modificar, redistribuir, publicar ni
+usar con fines comerciales este código ni sus partes sin autorización previa y
+por escrito del autor.
+
+Partes de terceros (conservan su propia licencia; ver LICENCIAS.txt):
+- Figuras del mapa muscular: react-native-body-highlighter, MIT,
+  (c) 2022 ELABBASSI Hicham.
+- Ilustraciones y datos de los ejercicios base: Exercise data by RepDB
+  (https://repdb.co), según sus condiciones de uso.

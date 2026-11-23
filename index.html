@@ -280,6 +280,23 @@ svg.graf text{fill:var(--muted);font-size:10px;font-family:inherit}
 .kilos-tarjeta button{margin-top:8px;min-height:44px;padding:0 16px;border:0;border-radius:12px;background:rgba(255,255,255,.16);color:inherit;font-weight:600;display:inline-flex;align-items:center;gap:8px}
 .foto-grande{width:100%;max-height:300px;object-fit:contain;border-radius:14px;background:var(--track);display:block}
 .pasos-lista{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px}
+/* Rutina Recap: visor tipo historia (siempre oscuro, como las historias de redes) */
+.btn.recap-enlace{align-self:center;font-size:12px;font-weight:500;color:var(--muted);margin-top:6px}
+.recap{position:fixed;inset:0;z-index:55;background:#0B1418;color:#FFFFFF;display:flex;flex-direction:column;align-items:center;
+  padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);-webkit-user-select:none;user-select:none}
+.recap-cab{width:100%;max-width:560px;display:flex;align-items:center;gap:6px;padding:6px 4px 2px 12px;flex:0 0 auto}
+.recap-barras{flex:1 1 auto;display:flex;gap:4px}
+.recap-barras span{flex:1 1 0;height:4px;border-radius:2px;background:rgba(255,255,255,.28);overflow:hidden}
+.recap-barras i{display:block;height:100%;width:0;background:#FFFFFF}
+.recap .icono{color:#FFFFFF}
+.recap-lienzo{flex:1 1 auto;min-height:0;width:100%;display:flex;align-items:center;justify-content:center;padding:0 8px}
+.recap canvas{display:block;border-radius:14px;touch-action:manipulation;cursor:pointer}
+.recap-pie{width:100%;max-width:560px;flex:0 0 auto;display:flex;flex-wrap:wrap;gap:8px;justify-content:center;align-items:center;padding:8px 12px 10px;min-height:64px}
+.recap-pie .btn{background:rgba(255,255,255,.14);border-color:transparent;color:#FFFFFF}
+.recap-pie .btn.prim{background:#FFFFFF;color:#14262F}
+.recap-pie .chk{display:flex;align-items:center;gap:8px;font-size:13px;min-height:44px;flex:1 1 100%;justify-content:center}
+.recap-pie .chk input{width:22px;height:22px;margin:0}
+.recap-pie .aviso{font-size:12px;opacity:.8;text-align:center;flex:1 1 100%}
 </style>
 </head>
 <body>
@@ -504,13 +521,15 @@ function documentoNuevo(ahora) {
     ejercicios: sembrar([], ahora), rutinas: [], sesiones: [], peso_corporal: [], papelera: []
   };
 }
-function perfilVacio() { return { nombre: "", peso_inicial: null, fecha_inicio: null, registro_inicial_id: null, bienvenida_hecha: false, figura: null }; }
+function perfilVacio() { return { nombre: "", peso_inicial: null, fecha_inicio: null, registro_inicial_id: null, bienvenida_hecha: false, figura: null, objetivo: null }; }
+const OBJETIVOS = ["bajar", "mantener", "ganar"];
 function sanearPerfil(p) {
   p = p && typeof p === "object" ? p : {};
   const kgI = typeof p.peso_inicial === "number" && isFinite(p.peso_inicial) && p.peso_inicial > 0 ? p.peso_inicial : null;
   return { nombre: String(p.nombre || "").trim().slice(0, 40), peso_inicial: kgI, fecha_inicio: esFecha(p.fecha_inicio) ? p.fecha_inicio : null,
     registro_inicial_id: p.registro_inicial_id ? String(p.registro_inicial_id) : null, bienvenida_hecha: !!p.bienvenida_hecha,
-    figura: p.figura === "hombre" || p.figura === "mujer" ? p.figura : null };
+    figura: p.figura === "hombre" || p.figura === "mujer" ? p.figura : null,
+    objetivo: OBJETIVOS.indexOf(p.objetivo) >= 0 ? p.objetivo : null };      // objetivo de peso (opcional): solo lo usa el Recap
 }
 /** «Marcelo Espinosa» → «marcelo-espinosa» (sin tildes ni espacios), para el nombre del .json. */
 function slugNombre(n) {
@@ -1025,7 +1044,11 @@ const COSAS = [
   { peso: 30000, uno: "una ballena jorobada", varios: "ballenas jorobadas", icono: "🐋" },
   { peso: 42000, uno: "un avión", varios: "aviones", icono: "✈️" },
   { peso: 120000, uno: "una locomotora", varios: "locomotoras", icono: "🚂" },
-  { peso: 150000, uno: "una ballena azul", varios: "ballenas azules", icono: "🐳" }
+  { peso: 150000, uno: "una ballena azul", varios: "ballenas azules", icono: "🐳" },
+  /* Para las cifras del año (Recap). Solo pesos bien documentados: Boeing 747-400 vacío ≈ 178 t;
+     Estación Espacial Internacional ≈ 420 t (NASA). */
+  { peso: 180000, uno: "un Boeing 747", varios: "Boeing 747", icono: "🛫" },
+  { peso: 420000, uno: "la Estación Espacial Internacional", varios: "estaciones espaciales", icono: "🛰️" }
 ];
 /** La cosa más grande que no queda muy por encima del total, y cuántas. 7.200 → «un elefante». */
 function equivalencia(kilos) {
@@ -1042,6 +1065,162 @@ function kilosEntre(estado, desde, hasta) {
     for (const x of seriesDe(s)) if (x.tipo === "trabajo") t += x.peso * x.reps;
   }
   return Math.round(t);
+}
+
+/* ── Rutina Recap: resumen del año (PLAN_RECAP_2026.md) ──────────────────
+   Reglas simples y auditables, sin IA. Sesión del año = fecha en el año y al menos una serie de
+   trabajo. Kilos: mismo criterio que kilosEntre (Σ peso × reps de trabajo). */
+const RECAP_MIN_SESIONES = 8;
+/** El año que se muestra: el actual; del 1 al 15 de enero, el anterior. */
+function anioRecap(hoy) {
+  const p = partesFecha(hoy) || partesFecha(fechaLocal());
+  return p.m === 1 && p.d <= 15 ? p.a - 1 : p.a;
+}
+const TITULOS_MAPA = { gluteo: "Glúteos de acero", pecho: "Pecho de armadura", espalda: "Espalda de alas", cuadriceps: "Piernas de roble",
+  femoral: "Piernas de roble", hombro: "Hombros de bola de cañón", core: "Core de titanio", biceps: "Brazos de herrero", triceps: "Brazos de herrero",
+  pantorrilla: "Pantorrillas de granito" };
+function recapDelAnio(estado, anio, hoy) {
+  if (!esFecha(hoy)) hoy = fechaLocal();
+  anio = Math.round(numO(anio, anioRecap(hoy)));
+  const desde = anio + "-01-01", hasta = anio + "-12-31";
+  const pf = sanearPerfil(estado && estado.perfil);
+  const fig = pf.figura;
+  const gen = (m, f, n) => (fig === "hombre" ? m : fig === "mujer" ? f : n);
+  const base = { anio: anio, titulo: "Rutina Recap " + anio, nombre: pf.nombre, figura: fig, minimo: RECAP_MIN_SESIONES };
+  const sesiones = sesionesValidas(estado).filter((s) => s.fecha >= desde && s.fecha <= hasta && tieneTrabajo(s)).sort(ordenSesion);
+  if (sesiones.length < RECAP_MIN_SESIONES) {
+    return Object.assign(base, { pocas: true, sesiones: sesiones.length, faltan: RECAP_MIN_SESIONES - sesiones.length, pantallas: ["pocas"] });
+  }
+  // días con la app: desde el primer uso (o el 1 de enero) hasta hoy (o el 31 de diciembre)
+  const fechas = [pf.fecha_inicio, fechaDeMs(estado.creado_en)].concat(sesionesValidas(estado).map((s) => s.fecha), pesosOrdenados(estado).map((p) => p.fecha)).filter(esFecha).sort();
+  const inicio = fechas.length && fechas[0] > desde ? fechas[0] : desde;
+  const fin = hoy < hasta ? (hoy < inicio ? inicio : hoy) : hasta;
+  const diasConApp = difDias(inicio, fin) + 1;
+  const semanasConApp = Math.max(1, Math.round(diasConApp / 7));
+  const tarde = inicio > sumarDias(desde, 60);
+
+  // constancia
+  let ms = 0;
+  const porDia = [0, 0, 0, 0, 0, 0, 0], porSemana = {};
+  let conHora = 0, temprano = 0, noche = 0;
+  for (const s of sesiones) {
+    const ini = numO(s.iniciada_en, null), finS = numO(s.terminada_en, null);
+    if (ini !== null && finS !== null) { const d = finS - ini; if (d >= 5 * 60000 && d <= 5 * 3600000) ms += d; }   // fuera de 5 min–5 h: sesión olvidada abierta
+    porDia[diaIso(s.fecha) - 1] += 1;
+    const l = lunesDe(s.fecha); porSemana[l] = (porSemana[l] || 0) + 1;
+    if (ini !== null) { const h = new Date(ini).getHours(); conHora += 1; if (h < 8) temprano += 1; if (h >= 19) noche += 1; }
+  }
+  const horas = r1(ms / 3600000);
+  let mejorRacha = 0, racha = 0, semanas = 0, semanas2 = 0;
+  for (let l = lunesDe(inicio); l <= lunesDe(fin); l = sumarDias(l, 7)) {
+    semanas += 1;
+    if (porSemana[l]) { racha += 1; mejorRacha = Math.max(mejorRacha, racha); } else racha = 0;
+    if ((porSemana[l] || 0) >= 2) semanas2 += 1;
+  }
+  const pctSemanas2 = semanas ? semanas2 / semanas : 0;
+  const iDia = porDia.indexOf(Math.max.apply(null, porDia));
+  const diaFavorito = { dia: NOMBRES_DIA[iDia], sesiones: porDia[iDia], texto: "Eres team " + NOMBRES_DIA[iDia] };
+  let franja = null;
+  if (conHora >= 4 && temprano / conHora >= 0.6) franja = { tipo: "temprano", pct: Math.round(temprano / conHora * 100), titulo: gen("Madrugador de hierro", "Madrugadora de hierro", "Madrugadas de hierro"), texto: "El " + Math.round(temprano / conHora * 100) + " % de tus sesiones empezó antes de las 8:00" };
+  else if (conHora >= 4 && noche / conHora >= 0.6) franja = { tipo: "noche", pct: Math.round(noche / conHora * 100), titulo: gen("Noctámbulo del gym", "Noctámbula del gym", "Noches de gym"), texto: "El " + Math.round(noche / conHora * 100) + " % de tus sesiones empezó después de las 19:00" };
+
+  // kilos y ejercicios
+  const kilos = kilosEntre(estado, desde, hasta);
+  const porEj = {};
+  const seriesAnio = [];
+  let repsTotal = 0, seriesTotal = 0;
+  for (const s of sesiones) {
+    const t = seriesDe(s).filter((x) => x.tipo === "trabajo");
+    for (const x of t) {
+      seriesAnio.push(x); repsTotal += x.reps; seriesTotal += 1;
+      const o = porEj[x.ejercicio_id] || (porEj[x.ejercicio_id] = { id: x.ejercicio_id, reps: 0, series: 0, sesiones: {} });
+      o.reps += x.reps; o.series += 1;
+      o.sesiones[s.fecha] = Math.max(o.sesiones[s.fecha] || 0, x.peso);       // peso top de ese día
+    }
+  }
+  const nombreEj = (id) => { const e = ejercicioPorId(estado, id); return e ? e.nombre : "Ejercicio borrado"; };
+  const top = Object.keys(porEj).map((k) => porEj[k]).sort((a, b) => b.reps - a.reps || b.series - a.series).slice(0, 5)
+    .map((o) => ({ id: o.id, nombre: nombreEj(o.id), reps: o.reps, series: o.series }));
+  // el más mejorado: peso top del primer mes contra el del último mes (mínimo 4 sesiones y 30 días entre la primera y la última)
+  let mejorado = null;
+  for (const k of Object.keys(porEj)) {
+    const dias = Object.keys(porEj[k].sesiones).sort();
+    if (dias.length < 4 || difDias(dias[0], dias[dias.length - 1]) < 30) continue;
+    const limIni = sumarDias(dias[0], 29), limFin = sumarDias(dias[dias.length - 1], -29);
+    const ini = Math.max.apply(null, dias.filter((f) => f <= limIni).map((f) => porEj[k].sesiones[f]));
+    const finP = Math.max.apply(null, dias.filter((f) => f >= limFin).map((f) => porEj[k].sesiones[f]));
+    if (!(ini > 0) || !(finP > ini)) continue;
+    const pct = (finP - ini) / ini;
+    if (!mejorado || pct > mejorado.pct) mejorado = { id: k, nombre: nombreEj(k), desde: ini, hasta: finP, pct: pct };
+  }
+  if (mejorado) mejorado.texto = "de " + kg(mejorado.desde) + " a " + kg(mejorado.hasta) + " kg (+" + Math.round(mejorado.pct * 100) + " %)";
+  // récords de peso del año: veces que el peso top de un ejercicio superó todo lo anterior (también lo de años previos)
+  let records = 0;
+  const maxPrevio = {};
+  for (const s of sesionesValidas(estado).filter((x) => x.fecha <= hasta).sort(ordenSesion)) {
+    const hoyMax = {};
+    for (const x of seriesDe(s)) if (x.tipo === "trabajo") hoyMax[x.ejercicio_id] = Math.max(hoyMax[x.ejercicio_id] || 0, x.peso);
+    for (const id of Object.keys(hoyMax)) {
+      if (s.fecha >= desde && maxPrevio[id] != null && hoyMax[id] > 0 && hoyMax[id] > maxPrevio[id]) records += 1;
+      maxPrevio[id] = Math.max(maxPrevio[id] == null ? 0 : maxPrevio[id], hoyMax[id]);
+    }
+  }
+
+  // mapa muscular del año
+  const musculos = musculosDeSeries(estado, seriesAnio);
+  const totalMus = GRUPOS.reduce((t, g) => t + (musculos[g.valor] || 0), 0);
+  const media = totalMus / GRUPOS.length;
+  const dominante = GRUPOS.map((g) => g.valor).sort((a, b) => (musculos[b] || 0) - (musculos[a] || 0))[0];
+  const parejo = media > 0 && (musculos[dominante] || 0) <= 1.5 * media;
+  const poco = (g) => (musculos[g] || 0) < 0.25 * media;
+  const broma = media <= 0 ? null : ["cuadriceps", "femoral", "gluteo"].some(poco) ? "Las piernas te extrañan 😅"
+    : poco("espalda") ? "La espalda te extraña 😅" : poco("pecho") ? "El pecho te extraña 😅" : null;
+  const mapa = {
+    musculos: musculos, dominante: dominante,
+    cortes: [1, Math.round(6 * semanasConApp), Math.round(12 * semanasConApp)],      // los cortes semanales (1 · 6 · 12) por las semanas con la app
+    titulo: parejo ? "Simetría total" : TITULOS_MAPA[dominante] || "Tu mapa del año",
+    texto: parejo ? "No dejaste ningún músculo atrás" : "Lo que más trabajaste: " + textoGrupo(dominante) + " · " + miles(musculos[dominante]) + " series",
+    broma: broma
+  };
+
+  // peso corporal (solo con 2+ registros en el año)
+  let peso = null;
+  const regs = pesosOrdenados(estado).filter((p) => p.fecha >= desde && p.fecha <= hasta);
+  if (regs.length >= 2) {
+    const delta = r2(regs[regs.length - 1].kg - regs[0].kg), o = pf.objetivo, abs = kg(Math.abs(delta));
+    let titulo, texto;
+    if (o === "ganar" && delta > 0) { titulo = "Ganaste " + abs + " kg"; texto = "Justo lo que buscabas"; }
+    else if (o === "bajar" && delta < 0) { titulo = "Bajaste " + abs + " kg"; texto = "Tu constancia se nota"; }
+    else if (o === "mantener" && Math.abs(delta) <= 1.5) { titulo = "Te mantuviste firme"; texto = "Todo el año en tu peso"; }
+    else { titulo = "Registraste tu peso " + regs.length + " veces"; texto = "Conocerte también es entrenar"; }
+    peso = { registros: regs.length, delta: delta, objetivo: o, titulo: titulo, texto: texto, puntos: regs.map((p) => ({ fecha: p.fecha, kg: p.kg })) };
+  }
+
+  // tu tipo de atleta: el primero que aplique
+  const mediaReps = seriesTotal ? repsTotal / seriesTotal : 0;
+  const seriesPorSesion = seriesTotal / sesiones.length;
+  const parte = (gs) => (totalMus > 0 ? gs.reduce((t, g) => t + (musculos[g] || 0), 0) / totalMus : 0);
+  const empuje = parte(["pecho", "hombro", "triceps"]), piernas = parte(["cuadriceps", "femoral", "gluteo", "pantorrilla"]);
+  const distintos = Object.keys(porEj).length;
+  let arquetipo;
+  if (mejorRacha >= 8 || pctSemanas2 >= 0.8) arquetipo = { clave: "constante", titulo: gen("El Constante", "La Constante", "Constancia pura"), icono: "🗓️",
+    texto: mejorRacha >= 8 ? mejorRacha + " semanas seguidas sin fallar" : Math.round(pctSemanas2 * 100) + " % de tus semanas con 2 sesiones o más" };
+  else if (mediaReps > 0 && mediaReps <= 6) arquetipo = { clave: "fuerza", titulo: "Fuerza bruta", icono: "🏋️", texto: "Pocas y pesadas: " + kg(r1(mediaReps)) + " repeticiones por serie en promedio" };
+  else if (seriesPorSesion >= 18) arquetipo = { clave: "volumen", titulo: "La máquina de volumen", icono: "⚙️", texto: kg(r1(seriesPorSesion)) + " series por sesión en promedio" };
+  else if (empuje > 0.45) arquetipo = { clave: "press", titulo: gen("Rey del press", "Reina del press", "Realeza del press"), icono: "👑", texto: "El " + Math.round(empuje * 100) + " % de tu trabajo fue de empuje" };
+  else if (piernas > 0.45) arquetipo = { clave: "piernas", titulo: "Piernas que no perdonan", icono: "🦵", texto: "El " + Math.round(piernas * 100) + " % de tu trabajo fue de piernas" };
+  else if (distintos >= 25) arquetipo = { clave: "explorador", titulo: gen("El Explorador", "La Exploradora", "Espíritu explorador"), icono: "🧭", texto: "Probaste " + distintos + " ejercicios distintos" };
+  else arquetipo = { clave: "construccion", titulo: "Atleta en construcción", icono: "🔨", texto: "Cada sesión suma. El próximo año, más" };
+
+  const pantallas = ["portada", "constancia", "kilos", "ejercicios", "mapa"].concat(peso ? ["peso"] : []).concat(["arquetipo", "final"]);
+  return Object.assign(base, {
+    pocas: false, pantallas: pantallas, desde: desde, hasta: hasta, inicio: inicio, fin: fin,
+    diasConApp: diasConApp, semanasConApp: semanasConApp, tarde: tarde,
+    intro: tarde ? "En tus " + semanasConApp + (semanasConApp === 1 ? " semana" : " semanas") + " con Rutina…" : "Tu año en el gym",
+    sesiones: sesiones.length, horas: horas, mejorRacha: mejorRacha, pctSemanas2: pctSemanas2, diaFavorito: diaFavorito, franja: franja,
+    kilos: kilos, equivalencia: equivalencia(kilos), series: seriesTotal, repeticiones: repsTotal, ejerciciosDistintos: distintos,
+    top: top, mejorado: mejorado, records: records, mapa: mapa, peso: peso, arquetipo: arquetipo
+  });
 }
 
 /* ── peso corporal ───────────────────────────────────────────────────── */
@@ -1243,7 +1422,7 @@ return {
   rutinasOrdenadas, rutinaQueToca, guardarRutina, empezarSesion, sesionParaRepetir,
   constancia, volumenSemana, musculosDeSeries, nivelDia, diasConTrabajo, calendarioMes, historialEjercicio, puntosEjercicio, resumenSeries,
   resumenSesion, pesosOrdenados, promedioMovil, cambioPeso, registrarPeso, cambioDesdeInicio,
-  equivalencia, kilosEntre, perfilVacio, sanearPerfil, slugNombre, nombreArchivo, leerPesoInicial,
+  equivalencia, kilosEntre, RECAP_MIN_SESIONES, anioRecap, recapDelAnio, OBJETIVOS, perfilVacio, sanearPerfil, slugNombre, nombreArchivo, leerPesoInicial,
   COMP_MAX_EJ, cargaDeRutina, validarCarga, planCompartida, aplicarCompartida, nombreRutinaLibre, normalNombre
 };
 })();
@@ -1942,6 +2121,8 @@ function ir(vista, params, reemplazar) {
   render(true);
 }
 window.addEventListener("popstate", (ev) => {
+  if (visor.ignorarPop) { visor.ignorarPop = false; return; }        // el × del Recap ya lo cerró
+  if (visor.abierto) { cerrarRecap(true); return; }                   // atrás de Android: cierra el Recap y deja la vista
   capas.slice().forEach((c) => cerrarCapa(c.id, null));
   const st = ev.state || {};
   ui.vista = st.vista || "inicio"; ui.params = st.params || {}; ui.edicion = null; ui.rirFila = null;
@@ -2436,6 +2617,409 @@ const compartirKilos = async (el) => {
   } finally { el.disabled = false; el.innerHTML = antes; }
 };
 
+/* ═══ RUTINA RECAP (fase 1: PLAN_RECAP_2026.md) ═══
+   dibujarPantallaRecap(ctx, recap, indice, t) dibuja la pantalla `indice` de recap.pantallas en el instante t (0–1 de su
+   animación) a 1080×1920. La usan el visor (requestAnimationFrame), las imágenes para compartir (t = 1) y, en la fase 2,
+   cada cuadro del video. Las figuras del mapa se preparan antes (prepararRecap), igual que en la tarjeta del mapa. */
+const RECAP_W = 1080, RECAP_H = 1920, RECAP_M = 90;
+const RECAP_FONDOS = {
+  portada: ["#3C7590", "#24495A", "#14262F"], constancia: ["#2C6C82", "#1B3F4E", "#0F1E26"], kilos: ["#F08A4B", "#B5481F", "#5A200D"],
+  ejercicios: ["#4E8C5E", "#2A5636", "#11261A"], mapa: ["#3C7590", "#24495A", "#14262F"], peso: ["#7A6BB0", "#47407A", "#1E1A3A"],
+  arquetipo: ["#E4572E", "#9C3418", "#3F150A"], final: ["#3C7590", "#24495A", "#14262F"], pocas: ["#3C7590", "#24495A", "#14262F"]
+};
+const RECAP_CLARO = "#CFE3EC", RECAP_ACENTO = "#F6C28B";
+const recapFiguras = { clave: null, imgs: null };
+async function prepararRecap(recap) {
+  if (!recap || recap.pocas) return;
+  const sexo = recap.figura || "hombre";
+  const clave = sexo + JSON.stringify(recap.mapa.musculos) + recap.mapa.cortes.join(",");
+  if (recapFiguras.clave === clave && recapFiguras.imgs) return;
+  try {
+    recapFiguras.imgs = await Promise.all([sexo + "-frente", sexo + "-espalda"].map((k) => imagenDeSvg(svgMapa(k, recap.mapa.musculos, recap.mapa.cortes, "imagen"))));
+    recapFiguras.clave = clave;
+  } catch (e) { recapFiguras.imgs = null; recapFiguras.clave = null; }
+}
+const suave = (x) => 1 - Math.pow(1 - Math.min(1, Math.max(0, x)), 3);
+const tramo = (t, desde, dur) => suave((t - desde) / (dur || 0.35));
+let letraRecap = null;
+const fuente = (peso, tam) => peso + " " + tam + "px " + (letraRecap || (letraRecap = getComputedStyle(document.body).fontFamily || "sans-serif"));
+function lineasTexto(c, texto, ancho) {
+  const out = []; let l = "";
+  for (const p of String(texto == null ? "" : texto).split(/\s+/)) {
+    const prueba = l ? l + " " + p : p;
+    if (c.measureText(prueba).width > ancho && l) { out.push(l); l = p; } else l = prueba;
+  }
+  if (l) out.push(l);
+  return out;
+}
+/** Escribe con aparición (alfa y subida) y devuelve la y de la línea siguiente. o: { f: [peso, tam], color, a, alin, ancho, max, inter } */
+function escribir(c, texto, x, y, o) {
+  const tam = o.f[1], inter = o.inter || Math.round(tam * 1.15), a = o.a == null ? 1 : o.a, ancho = o.ancho || RECAP_W - 2 * RECAP_M;
+  c.font = fuente(o.f[0], tam); c.textAlign = o.alin || "left"; c.textBaseline = "alphabetic";
+  let ls = o.encoger ? [String(texto)] : lineasTexto(c, texto, ancho);       // encoger: una línea, se angosta si no cabe (cifras)
+  if (o.max && ls.length > o.max) { ls = ls.slice(0, o.max); const corto = ls[o.max - 1].replace(/\s*\S*$/, ""); ls[o.max - 1] = (corto || ls[o.max - 1]) + "…"; }
+  if (a > 0) {
+    c.save(); c.globalAlpha *= a; c.fillStyle = o.color || "#FFFFFF";
+    ls.forEach((l, i) => c.fillText(l, x, y + i * inter + (1 - a) * 40, ancho));
+    c.restore();
+  }
+  return y + ls.length * inter;
+}
+function fondoRecap(c, clave, W, H) {
+  const col = RECAP_FONDOS[clave] || RECAP_FONDOS.portada;
+  const g = c.createRadialGradient(W * 0.85, 0, 0, W * 0.85, 0, H * 1.1);
+  g.addColorStop(0, col[0]); g.addColorStop(0.45, col[1]); g.addColorStop(1, col[2]);
+  c.fillStyle = g; c.fillRect(0, 0, W, H);
+  c.save(); c.globalAlpha = 0.07; c.fillStyle = "#FFFFFF";
+  c.beginPath(); c.arc(W * 0.08, H * 0.82, W * 0.42, 0, Math.PI * 2); c.fill();
+  c.beginPath(); c.arc(W * 0.95, H * 0.3, W * 0.22, 0, Math.PI * 2); c.fill();
+  c.restore();
+}
+function marcoRecap(c, r, W, H, a) {
+  escribir(c, r.titulo.toUpperCase(), RECAP_M, H >= 1900 ? 150 : 100, { f: ["700", 34], color: RECAP_CLARO, a: a });
+  c.save(); c.globalAlpha = 0.85 * a; c.font = fuente("800", 40); c.textAlign = "right"; c.fillStyle = "#FFFFFF"; c.fillText("Rutina", W - RECAP_M, H - 80); c.restore();
+}
+const contar = (v, t) => Math.round(v * suave(t));
+function figurasRecap(c, x0, y, ancho, alto, avance, a) {
+  const imgs = recapFiguras.imgs;
+  if (!imgs) return;
+  const anchos = imgs.map((im) => alto * im.width / im.height), sep = 50;
+  let k = 1;
+  if (anchos[0] + anchos[1] + sep > ancho) k = ancho / (anchos[0] + anchos[1] + sep);
+  const h = alto * k;
+  let x = x0 + (ancho - (anchos[0] + anchos[1]) * k - sep * k) / 2;
+  const yy = y + (alto - h) / 2;
+  imgs.forEach((im, i) => {
+    const w = anchos[i] * k;
+    c.save(); c.globalAlpha = 0.22 * a; c.drawImage(im, x, yy, w, h); c.restore();
+    c.save(); c.globalAlpha = a; c.beginPath(); c.rect(x - 10, yy + h * (1 - avance), w + 20, h * avance + 2); c.clip(); c.drawImage(im, x, yy, w, h); c.restore();
+    x += w + sep * k;
+  });
+}
+function pildorasRecap(c, r, y, t, W) {
+  const m = r.mapa.musculos;
+  c.font = fuente("600", 34);
+  const pills = Object.keys(m).filter((g) => m[g] > 0).sort((a, b) => m[b] - m[a]).slice(0, 4).map((g) => {
+    const txt = L.textoGrupo(g) + " · " + L.miles(m[g]);
+    return { txt, n: Math.max(0, nivelMapa(m[g], r.mapa.cortes)), w: c.measureText(txt).width + 76 };
+  });
+  const filas = [[]]; let ancho = 0;
+  for (const pl of pills) { if (ancho + pl.w > W - 2 * RECAP_M && filas[filas.length - 1].length) { filas.push([]); ancho = 0; } filas[filas.length - 1].push(pl); ancho += pl.w + 16; }
+  filas.forEach((fila, fi) => {
+    let fx = (W - fila.reduce((s, pl) => s + pl.w, 0) - 16 * (fila.length - 1)) / 2;
+    const fy = y + fi * 80;
+    c.save(); c.globalAlpha = tramo(t, 0.55 + fi * 0.1);
+    for (const pl of fila) {
+      c.fillStyle = "rgba(255,255,255,0.12)"; pildoraCanvas(c, fx, fy, pl.w, 64, 32); c.fill();
+      c.fillStyle = MAPA_IMAGEN.nivel[pl.n]; c.beginPath(); c.arc(fx + 34, fy + 32, 10, 0, Math.PI * 2); c.fill();
+      c.fillStyle = "#FFFFFF"; c.textAlign = "left"; c.fillText(pl.txt, fx + 56, fy + 44);
+      fx += pl.w + 16;
+    }
+    c.restore();
+  });
+  return y + filas.length * 80;
+}
+const PANTALLAS_RECAP = {
+  pocas(c, r, t) {
+    const W = RECAP_W, M = RECAP_M;
+    let y = escribir(c, r.titulo, M, 520, { f: ["800", 110], a: tramo(t, 0) });
+    y = escribir(c, "Llevas " + r.sesiones + (r.sesiones === 1 ? " sesión" : " sesiones") + " este año", M, y + 60, { f: ["600", 60], color: RECAP_ACENTO, a: tramo(t, 0.15) });
+    c.save(); c.globalAlpha = tramo(t, 0.25);
+    c.fillStyle = "rgba(255,255,255,0.16)"; pildoraCanvas(c, M, y + 40, W - 2 * M, 36, 18); c.fill();
+    c.fillStyle = RECAP_ACENTO; pildoraCanvas(c, M, y + 40, Math.max(36, (W - 2 * M) * Math.min(1, r.sesiones / r.minimo) * suave(t)), 36, 18); c.fill();
+    c.restore();
+    y = escribir(c, "Vuelve cuando tengas más entrenamientos: desde " + r.minimo + " sesiones en el año armamos tu Recap.", M, y + 180, { f: ["500", 54], a: tramo(t, 0.35) });
+    c.save(); c.globalAlpha = tramo(t, 0.5); c.font = fuente("", 300); c.textAlign = "center"; c.fillText("🌱", W / 2, 1640); c.restore();
+  },
+  portada(c, r, t) {
+    const M = RECAP_M;
+    escribir(c, "Rutina", M, 560, { f: ["800", 170], a: tramo(t, 0) });
+    escribir(c, "Recap", M, 740, { f: ["800", 170], a: tramo(t, 0.08) });
+    escribir(c, String(r.anio), M, 1040, { f: ["800", 300], color: RECAP_ACENTO, a: tramo(t, 0.16) });
+    if (r.nombre) escribir(c, r.nombre, M, 1160, { f: ["700", 72], a: tramo(t, 0.26), max: 1 });
+    c.save(); c.globalAlpha = tramo(t, 0.35); c.font = fuente("800", 160); c.textAlign = "left"; c.fillStyle = "#FFFFFF";
+    c.fillText(L.miles(contar(r.diasConApp, t)), M, 1520); c.restore();
+    escribir(c, r.diasConApp === 1 ? "día con la app" : "días con la app", M, 1600, { f: ["600", 54], color: RECAP_CLARO, a: tramo(t, 0.4) });
+    escribir(c, r.intro, M, 1700, { f: ["500", 48], a: tramo(t, 0.5) });
+  },
+  constancia(c, r, t) {
+    const W = RECAP_W, M = RECAP_M;
+    escribir(c, "Constancia", M, 330, { f: ["800", 96], a: tramo(t, 0) });
+    c.save(); c.globalAlpha = tramo(t, 0.05); c.font = fuente("800", 230); c.textAlign = "left"; c.fillStyle = "#FFFFFF"; c.fillText(L.miles(contar(r.sesiones, t)), M, 640); c.restore();
+    escribir(c, r.sesiones === 1 ? "sesión" : "sesiones", M, 720, { f: ["600", 56], color: RECAP_CLARO, a: tramo(t, 0.1) });
+    const col1 = r.horas > 0 ? { v: L.kg(Math.round(r.horas * suave(t) * 10) / 10), e: "horas entrenando" } : { v: Math.round(r.pctSemanas2 * 100 * suave(t)) + " %", e: "semanas con 2+ sesiones" };
+    const col2 = { v: String(contar(r.mejorRacha, t)), e: r.mejorRacha === 1 ? "semana: tu mejor racha" : "semanas seguidas: tu mejor racha" };
+    const mitad = (W - 2 * M) / 2;
+    [col1, col2].forEach((co, i) => {
+      const x = M + i * (mitad + 20), a = tramo(t, 0.2 + i * 0.08);
+      c.save(); c.globalAlpha = a; c.font = fuente("800", 130); c.textAlign = "left"; c.fillStyle = "#FFFFFF"; c.fillText(co.v, x, 960, mitad - 20); c.restore();
+      escribir(c, co.e, x, 1030, { f: ["600", 42], color: RECAP_CLARO, a: a, ancho: mitad - 30 });
+    });
+    let y = escribir(c, r.diaFavorito.texto, M, 1300, { f: ["800", 96], color: RECAP_ACENTO, a: tramo(t, 0.35) });
+    y = escribir(c, r.diaFavorito.sesiones + (r.diaFavorito.sesiones === 1 ? " sesión" : " sesiones") + " en " + r.diaFavorito.dia, M, y, { f: ["500", 44], color: RECAP_CLARO, a: tramo(t, 0.4) });
+    if (r.franja) {
+      y = escribir(c, r.franja.titulo, M, y + 110, { f: ["800", 70], a: tramo(t, 0.5) });
+      escribir(c, r.franja.texto, M, y + 10, { f: ["500", 42], color: RECAP_CLARO, a: tramo(t, 0.55) });
+    }
+  },
+  kilos(c, r, t) {
+    const W = RECAP_W, M = RECAP_M;
+    escribir(c, "Este año levantaste", M, 420, { f: ["700", 66], a: tramo(t, 0) });
+    c.save(); c.globalAlpha = tramo(t, 0.05); c.font = fuente("800", 200); c.textAlign = "left"; c.fillStyle = "#FFFFFF";
+    c.fillText(L.miles(contar(r.kilos, t)), M, 650, W - 2 * M); c.restore();
+    escribir(c, "kilos", M, 760, { f: ["700", 80], color: RECAP_ACENTO, a: tramo(t, 0.1) });
+    const eq = r.equivalencia;
+    if (eq) {
+      let y = escribir(c, "Es como levantar", M, 930, { f: ["500", 56], a: tramo(t, 0.3) });
+      escribir(c, eq.texto, M, y + 10, { f: ["800", 86], color: RECAP_ACENTO, a: tramo(t, 0.38), max: 2 });
+      const k = 0.6 + 0.4 * tramo(t, 0.45, 0.4);
+      c.save(); c.globalAlpha = tramo(t, 0.45); c.translate(W / 2, 1480); c.scale(k, k); c.font = fuente("", 380); c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(eq.icono, 0, 0); c.restore();
+    } else escribir(c, "Cada kilo cuenta", M, 930, { f: ["600", 60], a: tramo(t, 0.3) });
+    escribir(c, L.miles(r.series) + " series · " + L.miles(r.repeticiones) + " repeticiones", M, 1760, { f: ["500", 42], color: "#FFE3CF", a: tramo(t, 0.55) });
+  },
+  ejercicios(c, r, t) {
+    const W = RECAP_W, M = RECAP_M;
+    escribir(c, "Tus ejercicios estrella", M, 330, { f: ["800", 84], a: tramo(t, 0), max: 2 });
+    const max = r.top.length ? r.top[0].reps : 1;
+    r.top.forEach((e, i) => {
+      const y = 540 + i * 150, a = tramo(t, 0.08 + i * 0.07);
+      escribir(c, String(i + 1), M, y, { f: ["800", 60], color: RECAP_ACENTO, a: a });
+      escribir(c, e.nombre, M + 70, y, { f: ["700", 46], a: a, max: 1, ancho: W - 2 * M - 70 });
+      escribir(c, L.miles(e.reps) + " repeticiones", M + 70, y + 50, { f: ["500", 38], color: RECAP_CLARO, a: a });
+      c.save(); c.globalAlpha = a;
+      c.fillStyle = "rgba(255,255,255,0.14)"; pildoraCanvas(c, M + 70, y + 72, W - 2 * M - 70, 14, 7); c.fill();
+      c.fillStyle = RECAP_ACENTO; pildoraCanvas(c, M + 70, y + 72, Math.max(14, (W - 2 * M - 70) * e.reps / max * tramo(t, 0.15 + i * 0.07, 0.5)), 14, 7); c.fill();
+      c.restore();
+    });
+    let y = 1360;
+    if (r.mejorado) {
+      y = escribir(c, "El más mejorado", M, y, { f: ["600", 40], color: RECAP_CLARO, a: tramo(t, 0.5) });
+      y = escribir(c, r.mejorado.nombre, M, y + 6, { f: ["800", 56], a: tramo(t, 0.55), max: 1 });
+      y = escribir(c, r.mejorado.texto, M, y, { f: ["600", 48], color: RECAP_ACENTO, a: tramo(t, 0.6) });
+    }
+    escribir(c, r.records > 0 ? r.records + (r.records === 1 ? " récord de peso" : " récords de peso") + " este año" : "Este año construiste la base",
+      M, Math.max(y + 110, 1700), { f: ["800", 56], a: tramo(t, 0.65) });
+  },
+  mapa(c, r, t) {
+    const W = RECAP_W, M = RECAP_M;
+    let y = escribir(c, r.mapa.titulo, M, 320, { f: ["800", 96], a: tramo(t, 0), max: 2 });
+    escribir(c, r.mapa.texto, M, y, { f: ["500", 44], color: RECAP_CLARO, a: tramo(t, 0.08), max: 2 });
+    figurasRecap(c, M, 560, W - 2 * M, 960, tramo(t, 0.15, 0.6), tramo(t, 0.1));
+    const yp = pildorasRecap(c, r, 1560, t, W);
+    if (r.mapa.broma) escribir(c, r.mapa.broma, W / 2, Math.max(yp + 50, 1760), { f: ["700", 46], color: RECAP_ACENTO, a: tramo(t, 0.7), alin: "center" });
+  },
+  peso(c, r, t) {
+    const W = RECAP_W, M = RECAP_M, p = r.peso;
+    escribir(c, "Tu peso", M, 400, { f: ["600", 56], color: RECAP_CLARO, a: tramo(t, 0) });
+    let y = escribir(c, p.titulo, M, 540, { f: ["800", 110], a: tramo(t, 0.05), max: 3 });
+    escribir(c, p.texto, M, y + 10, { f: ["600", 58], color: RECAP_ACENTO, a: tramo(t, 0.12) });
+    const pts = p.puntos, x0 = M, x1 = W - M, y0 = 1080, y1 = 1520;
+    const kgs = pts.map((q) => q.kg), lo = Math.min.apply(null, kgs), hi = Math.max.apply(null, kgs), rango = Math.max(1, hi - lo);
+    const d0 = L.difDias(pts[0].fecha, pts[pts.length - 1].fecha) || 1;
+    const xy = pts.map((q) => [x0 + (x1 - x0) * (L.difDias(pts[0].fecha, q.fecha) / d0), y1 - (y1 - y0) * ((q.kg - lo) / rango)]);
+    const av = tramo(t, 0.2, 0.7), hasta = Math.max(1, Math.ceil(xy.length * av));
+    c.save(); c.globalAlpha = tramo(t, 0.2);
+    c.strokeStyle = "rgba(255,255,255,0.18)"; c.lineWidth = 2; c.beginPath(); c.moveTo(x0, y1 + 30); c.lineTo(x1, y1 + 30); c.stroke();
+    c.strokeStyle = "#FFFFFF"; c.lineWidth = 8; c.lineJoin = "round"; c.lineCap = "round"; c.beginPath();
+    xy.slice(0, hasta).forEach((q, i) => (i ? c.lineTo(q[0], q[1]) : c.moveTo(q[0], q[1]))); c.stroke();
+    c.fillStyle = RECAP_ACENTO; [xy[0], xy[hasta - 1]].forEach((q) => { c.beginPath(); c.arc(q[0], q[1], 16, 0, Math.PI * 2); c.fill(); });
+    c.restore();
+    escribir(c, L.kg(pts[0].kg) + " kg", x0, y1 + 100, { f: ["600", 40], color: RECAP_CLARO, a: tramo(t, 0.3) });
+    escribir(c, L.kg(pts[pts.length - 1].kg) + " kg", x1, y1 + 100, { f: ["700", 40], a: tramo(t, 0.8), alin: "right" });
+    escribir(c, p.registros + " registros en el año", M, 1760, { f: ["500", 42], color: RECAP_CLARO, a: tramo(t, 0.5) });
+  },
+  arquetipo(c, r, t) {
+    const W = RECAP_W, M = RECAP_M, q = r.arquetipo;
+    escribir(c, "Tu tipo de atleta", W / 2, 420, { f: ["700", 66], a: tramo(t, 0), alin: "center" });
+    const k = 0.5 + 0.5 * tramo(t, 0.1, 0.5);
+    c.save(); c.globalAlpha = tramo(t, 0.1); c.translate(W / 2, 860); c.scale(k, k); c.font = fuente("", 360); c.textAlign = "center"; c.textBaseline = "middle"; c.fillText(q.icono, 0, 0); c.restore();
+    const y = escribir(c, q.titulo, W / 2, 1300, { f: ["800", 118], a: tramo(t, 0.3), alin: "center", max: 3 });
+    escribir(c, q.texto, W / 2, y + 30, { f: ["500", 52], color: "#FFE3CF", a: tramo(t, 0.45), alin: "center", max: 3 });
+  },
+  final(c, r, t, op) { dibujarFinalRecap(c, r, RECAP_W, RECAP_H, t, !!(op && op.conPeso)); }
+};
+/** Tarjeta final en 1080×1920 (historias) o 1080×1350 (feed). El peso solo sale con conPeso. */
+function dibujarFinalRecap(c, r, W, H, t, conPeso) {
+  const M = RECAP_M, alto = H >= 1900;
+  const P = alto ? { nom: 250, grid: 320, card: 230, mapTop: 840, mapAlto: 760, mapTit: 1700, peso: 1770 } : { nom: 180, grid: 225, card: 200, mapTop: 665, mapAlto: 400, mapTit: 1135, peso: 1190 };
+  if (!alto) { fondoRecap(c, "final", W, H); marcoRecap(c, r, W, H, tramo(t, 0)); }
+  escribir(c, r.nombre || "Mi año en el gym", M, P.nom, { f: ["800", 80], a: tramo(t, 0.02), max: 1 });
+  const cw = (W - 2 * M - 30) / 2, top = r.top[0];
+  const tarjetas = [
+    { e: "Kilos", v: L.miles(contar(r.kilos, t)) + " kg", s: r.equivalencia ? r.equivalencia.texto : "" },
+    { e: "Sesiones", v: L.miles(contar(r.sesiones, t)), s: r.horas > 0 ? L.kg(r.horas) + " horas" : r.mejorRacha + " sem. de racha" },
+    { e: "Ejercicio estrella", v: top ? top.nombre : "—", s: top ? L.miles(top.reps) + " reps" : "", texto: true },
+    { e: "Tipo de atleta", v: r.arquetipo.icono + " " + r.arquetipo.titulo, s: "", texto: true }
+  ];
+  tarjetas.forEach((tj, i) => {
+    const x = M + (i % 2) * (cw + 30), y = P.grid + Math.floor(i / 2) * (P.card + 20), a = tramo(t, 0.08 + i * 0.06);
+    c.save(); c.globalAlpha = a; c.fillStyle = "rgba(255,255,255,0.10)"; pildoraCanvas(c, x, y, cw, P.card, 36); c.fill(); c.restore();
+    escribir(c, tj.e, x + 30, y + 56, { f: ["600", 32], color: RECAP_CLARO, a: a, ancho: cw - 60 });
+    if (tj.texto) escribir(c, tj.v, x + 30, y + 112, { f: ["800", 44], a: a, ancho: cw - 60, max: 2, inter: 50 });
+    else escribir(c, tj.v, x + 30, y + 130, { f: ["800", 66], a: a, ancho: cw - 60, encoger: true });
+    if (tj.s && !tj.texto) escribir(c, tj.s, x + 30, y + P.card - 32, { f: ["500", 30], color: RECAP_CLARO, a: a, ancho: cw - 60, max: 1 });
+    else if (tj.s) escribir(c, tj.s, x + 30, y + P.card - 26, { f: ["500", 30], color: RECAP_CLARO, a: a, ancho: cw - 60, max: 1 });
+  });
+  figurasRecap(c, M, P.mapTop, W - 2 * M, P.mapAlto, tramo(t, 0.3, 0.6), tramo(t, 0.25));
+  escribir(c, r.mapa.titulo, W / 2, P.mapTit, { f: ["800", 60], a: tramo(t, 0.5), alin: "center", max: 1 });
+  if (conPeso && r.peso) escribir(c, "Peso: " + r.peso.titulo.toLowerCase(), W / 2, P.peso, { f: ["600", 38], color: RECAP_ACENTO, a: tramo(t, 0.6), alin: "center", max: 1 });
+  c.save(); c.globalAlpha = 0.85 * tramo(t, 0.6); c.font = fuente("500", 34); c.textAlign = "left"; c.fillStyle = RECAP_CLARO;
+  c.fillText(L.miles(r.diasConApp) + (r.diasConApp === 1 ? " día" : " días") + " con la app", M, H - 80, W - 2 * M - 220); c.restore();
+}
+function dibujarPantallaRecap(ctx, recap, indice, t, op) {
+  const clave = recap.pantallas[indice] || recap.pantallas[0];
+  t = Math.min(1, Math.max(0, Number(t) || 0));
+  ctx.save();
+  ctx.clearRect(0, 0, RECAP_W, RECAP_H);
+  fondoRecap(ctx, clave, RECAP_W, RECAP_H);
+  marcoRecap(ctx, recap, RECAP_W, RECAP_H, tramo(t, 0));
+  (PANTALLAS_RECAP[clave] || PANTALLAS_RECAP.portada)(ctx, recap, t, op || {});
+  ctx.restore();
+}
+/** Texto para lectores de pantalla (el lienzo no se lee solo). */
+function textoPantallaRecap(r, clave) {
+  switch (clave) {
+    case "pocas": return r.titulo + ". Llevas " + r.sesiones + " sesiones este año. Desde " + r.minimo + " sesiones armamos tu Recap.";
+    case "portada": return r.titulo + (r.nombre ? ", " + r.nombre : "") + ". " + r.diasConApp + " días con la app. " + r.intro;
+    case "constancia": return "Constancia: " + r.sesiones + " sesiones, " + (r.horas > 0 ? L.kg(r.horas) + " horas, " : "") + "mejor racha " + r.mejorRacha + " semanas. " + r.diaFavorito.texto + "." + (r.franja ? " " + r.franja.titulo + "." : "");
+    case "kilos": return "Este año levantaste " + L.miles(r.kilos) + " kilos." + (r.equivalencia ? " Es como levantar " + r.equivalencia.texto + "." : "");
+    case "ejercicios": return "Tus ejercicios estrella: " + r.top.map((e) => e.nombre + ", " + e.reps + " repeticiones").join("; ") + "." + (r.mejorado ? " El más mejorado: " + r.mejorado.nombre + ", " + r.mejorado.texto + "." : "") + " " + r.records + " récords de peso.";
+    case "mapa": return r.mapa.titulo + ". " + r.mapa.texto + "." + (r.mapa.broma ? " " + r.mapa.broma : "");
+    case "peso": return "Tu peso: " + r.peso.titulo + ". " + r.peso.texto + ".";
+    case "arquetipo": return "Tu tipo de atleta: " + r.arquetipo.titulo + ". " + r.arquetipo.texto + ".";
+    default: return "Resumen: " + L.miles(r.kilos) + " kilos, " + r.sesiones + " sesiones, tipo de atleta " + r.arquetipo.titulo + ".";
+  }
+}
+async function imagenRecap(recap, indice, alto, conPeso) {
+  await prepararRecap(recap);
+  const cv = document.createElement("canvas");
+  cv.width = RECAP_W; cv.height = alto;
+  const c = cv.getContext("2d");
+  if (alto === RECAP_H) dibujarPantallaRecap(c, recap, indice, 1, { conPeso: conPeso });
+  else dibujarFinalRecap(c, recap, RECAP_W, alto, 1, conPeso);
+  return new Promise((ok, mal) => cv.toBlob((b) => (b ? ok(b) : mal(new Error("Sin imagen"))), "image/png"));
+}
+
+/* Visor tipo historia: tocar a la derecha avanza, a la izquierda vuelve, mantener pausa. Solo lee el estado. */
+const RECAP_DUR = 7000, RECAP_ANIM = 1400;
+const visor = { abierto: false, recap: null, i: 0, t0: 0, pausaEn: null, conPeso: false, raf: 0, dibujadoT: -1, historia: false, ignorarPop: false, pulso: null, compartiendo: false };
+const sinMovimiento = () => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; } };
+async function abrirRecap() {
+  if (!estado || visor.abierto) return;
+  const recap = L.recapDelAnio(estado, L.anioRecap(hoy()), hoy());
+  await prepararRecap(recap);
+  Object.assign(visor, { abierto: true, recap: recap, i: 0, conPeso: false, pausaEn: null, pulso: null, compartiendo: false });
+  document.body.insertAdjacentHTML("beforeend", '<div class="recap" id="recap" role="dialog" aria-modal="true" aria-label="' + esc(recap.titulo) + '">' +
+    '<div class="recap-cab"><div class="recap-barras" aria-hidden="true">' + recap.pantallas.map(() => "<span><i></i></span>").join("") + "</div>" +
+    '<button class="sr" data-a="recapPaso" data-d="-1">Pantalla anterior</button><button class="sr" data-a="recapPaso" data-d="1">Pantalla siguiente</button>' +
+    '<button class="icono" data-a="cerrarRecap" aria-label="Cerrar el Recap">' + ic("x", 24, 2.2) + "</button></div>" +
+    '<div class="recap-lienzo"><canvas id="recap-lienzo" width="' + RECAP_W + '" height="' + RECAP_H + '" role="img"></canvas></div>' +
+    '<div class="recap-pie" id="recap-pie"></div></div>');
+  const cv = $("#recap-lienzo");
+  cv.addEventListener("pointerdown", (ev) => {
+    visor.pulso = { x: ev.clientX, pausado: false };
+    const p = visor.pulso;
+    setTimeout(() => { if (visor.pulso === p && visor.pausaEn == null) { p.pausado = true; visor.pausaEn = performance.now(); } }, 280);
+  });
+  const soltar = (ev, navegar) => {
+    const p = visor.pulso; visor.pulso = null;
+    if (!p) return;
+    if (p.pausado) { if (visor.pausaEn != null) { visor.t0 += performance.now() - visor.pausaEn; visor.pausaEn = null; } return; }
+    if (!navegar) return;
+    const caja = cv.getBoundingClientRect();
+    pasoRecap(ev.clientX < caja.left + caja.width / 3 ? -1 : 1);
+  };
+  cv.addEventListener("pointerup", (ev) => soltar(ev, true));
+  cv.addEventListener("pointercancel", (ev) => soltar(ev, false));
+  cv.addEventListener("pointerleave", (ev) => soltar(ev, false));
+  cv.addEventListener("contextmenu", (ev) => ev.preventDefault());
+  try { history.pushState({ vista: ui.vista, params: ui.params, recap: true }, ""); visor.historia = true; } catch (e) { visor.historia = false; }
+  window.addEventListener("resize", ajustarRecap);
+  ajustarRecap();
+  irPantallaRecap(0);
+  visor.raf = requestAnimationFrame(cuadroRecap);
+}
+function cerrarRecap(desdeHistorial) {
+  if (!visor.abierto) return;
+  visor.abierto = false;
+  cancelAnimationFrame(visor.raf);
+  window.removeEventListener("resize", ajustarRecap);
+  const el = $("#recap"); if (el) el.remove();
+  if (!desdeHistorial && visor.historia) { visor.ignorarPop = true; try { history.back(); } catch (e) { visor.ignorarPop = false; } }
+  visor.historia = false;
+}
+function ajustarRecap() {
+  const caja = document.querySelector(".recap-lienzo"), cv = $("#recap-lienzo");
+  if (!caja || !cv) return;
+  const w = Math.max(100, Math.min(caja.clientWidth - 16, caja.clientHeight * 9 / 16));
+  cv.style.width = Math.floor(w) + "px"; cv.style.height = Math.floor(w * 16 / 9) + "px";
+}
+function irPantallaRecap(i) {
+  const r = visor.recap;
+  visor.i = Math.max(0, Math.min(r.pantallas.length - 1, i));
+  visor.t0 = performance.now(); visor.pausaEn = null; visor.dibujadoT = -1;
+  const cv = $("#recap-lienzo"); if (cv) cv.setAttribute("aria-label", textoPantallaRecap(r, r.pantallas[visor.i]));
+  pintarPieRecap();
+}
+function pasoRecap(d) {
+  if (!visor.abierto) return;
+  const n = visor.recap.pantallas.length;
+  if (d > 0 && visor.i >= n - 1) return;             // la última se queda (para compartir); se cierra con ×
+  irPantallaRecap(visor.i + (d < 0 ? -1 : 1));
+}
+function cuadroRecap(ahora) {
+  if (!visor.abierto) return;
+  const r = visor.recap, n = r.pantallas.length, ultima = visor.i >= n - 1;
+  const pasado = (visor.pausaEn != null || visor.compartiendo ? (visor.pausaEn || ahora) : ahora) - visor.t0;
+  const t = sinMovimiento() ? 1 : Math.min(1, pasado / RECAP_ANIM);
+  if (t !== visor.dibujadoT) {
+    const cv = $("#recap-lienzo");
+    if (cv) dibujarPantallaRecap(cv.getContext("2d"), r, visor.i, t, { conPeso: visor.conPeso });
+    visor.dibujadoT = t;
+  }
+  document.querySelectorAll(".recap-barras i").forEach((b, j) => { b.style.width = (j < visor.i || (j === visor.i && ultima) ? 100 : j === visor.i ? Math.min(100, pasado / RECAP_DUR * 100) : 0) + "%"; });
+  if (!ultima && visor.pausaEn == null && !visor.compartiendo && pasado >= RECAP_DUR) irPantallaRecap(visor.i + 1);
+  visor.raf = requestAnimationFrame(cuadroRecap);
+}
+function pintarPieRecap() {
+  const pie = $("#recap-pie"); if (!pie) return;
+  const r = visor.recap, clave = r.pantallas[visor.i];
+  const chk = r.peso ? '<label class="chk"><input type="checkbox" data-c="recapPeso"' + (visor.conPeso ? " checked" : "") + "> Incluir mi peso al compartir</label>" : "";
+  const icoC = ic("compartir", 18, 2);
+  let h = "";
+  if (clave === "pocas") h = '<span class="aviso">Tu Recap se arma desde ' + r.minimo + " sesiones en el año. Todo se calcula en este teléfono.</span>";
+  else if (clave === "final") h = chk + '<button class="btn prim" data-a="compartirRecap" data-formato="historia">' + icoC + " Historia</button>" +
+    '<button class="btn" data-a="compartirRecap" data-formato="feed">' + icoC + " Feed</button>";
+  else if (clave === "peso") h = chk + '<button class="btn" data-a="compartirRecap" data-formato="pantalla"' + (visor.conPeso ? "" : " disabled") + ">" + icoC + " Compartir esta imagen</button>" +
+    (visor.conPeso ? "" : '<span class="aviso">Tu peso no sale en lo que compartes salvo que actives la casilla.</span>');
+  else h = '<button class="btn" data-a="compartirRecap" data-formato="pantalla">' + icoC + " Compartir esta imagen</button>";
+  pie.innerHTML = h;
+}
+async function compartirRecap(el) {
+  const r = visor.recap; if (!r || r.pocas) return;
+  const clave = r.pantallas[visor.i], formato = el.dataset.formato;
+  if (clave === "peso" && !visor.conPeso) return;
+  const conPeso = visor.conPeso && (clave === "peso" || clave === "final");
+  visor.compartiendo = true; const congelado = performance.now();
+  el.disabled = true;
+  try {
+    const alto = formato === "feed" ? 1350 : RECAP_H;
+    const img = await imagenRecap(r, visor.i, alto, conPeso);
+    const nombre = "rutina-recap-" + r.anio + "-" + (formato === "feed" ? "feed" : clave) + ".png";
+    await compartirImagen(img, nombre, r.titulo + ": " + L.miles(r.kilos) + " kg en " + r.sesiones + " sesiones.");
+  } catch (e) {
+    if (!(e && e.name === "AbortError")) toast("No se pudo compartir. Prueba otra vez.");
+  } finally {
+    el.disabled = false; visor.compartiendo = false; visor.t0 += performance.now() - congelado;
+  }
+}
+document.addEventListener("keydown", (ev) => {
+  if (!visor.abierto) return;
+  if (ev.key === "ArrowRight") { ev.preventDefault(); pasoRecap(1); }
+  else if (ev.key === "ArrowLeft") { ev.preventDefault(); pasoRecap(-1); }
+  else if (ev.key === "Escape") { ev.preventDefault(); cerrarRecap(false); }
+});
+
 /* ── Resumen ── */
 function vResumen() {
   const r = L.resumenSesion(estado, ui.params.id, Date.now());
@@ -2744,6 +3328,8 @@ function vAjustes() {
   const pf = estado.perfil || {};
   h += '<section class="tarjeta col"><h2>Perfil</h2><label class="campo">Nombre<input class="entrada" id="perfil-nombre" maxlength="40" autocapitalize="words" value="' + esc(pf.nombre || "") + '"></label><button class="btn ancho" data-a="guardarNombre">Guardar nombre</button>' +
     '<div class="campo"><span>Figura del mapa muscular</span><div class="fila" style="gap:8px"><button class="chip" data-a="figura" data-f="hombre" aria-pressed="' + (pf.figura === "hombre") + '">Hombre</button><button class="chip" data-a="figura" data-f="mujer" aria-pressed="' + (pf.figura === "mujer") + '">Mujer</button></div></div>' +
+    '<div class="campo"><span>Objetivo de peso <span class="ayuda">· opcional; solo lo usa tu Recap del año</span></span><div class="chips envolver">' +
+    [["bajar", "Bajar"], ["mantener", "Mantener"], ["ganar", "Ganar"], ["", "Sin objetivo"]].map((o) => '<button class="chip" data-a="objetivo" data-o="' + o[0] + '" aria-pressed="' + ((pf.objetivo || "") === o[0]) + '">' + o[1] + "</button>").join("") + "</div></div>" +
     '<span class="mini tenue">Se usa en el saludo y en el nombre sugerido del respaldo (' + esc(L.nombreArchivo(estado, false)) + ').' + (pf.peso_inicial ? " Peso inicial: " + L.kg(pf.peso_inicial) + " kg" + (pf.fecha_inicio ? " (" + L.fechaCorta(pf.fecha_inicio) + ")" : "") + "; se corrige en Peso." : "") + "</span></section>";
   h += '<section class="tarjeta col"><h2>Guardado</h2>';
   h += '<span class="pequeno">Estado: <b>' + esc(g.texto) + "</b>. Todo se guarda al instante en este teléfono. El respaldo lo guardas tú: «Guardar respaldo» abre el menú de compartir (" + esc(ES_IOS ? "Guardar en Archivos, iCloud Drive…" : "Drive, Archivos…") + ") o lo descarga.</span>";
@@ -2780,7 +3366,8 @@ function vAjustes() {
   h += '<section class="tarjeta col"><h2>Lista base</h2><span class="pequeno tenue">Agrega los ejercicios base que falten (por nombre), sin tocar los tuyos.</span><button class="btn ancho" data-a="sembrar">Cargar los que falten</button></section>';
   h += '<section class="tarjeta col" style="gap:6px"><h2>Créditos</h2><span class="pequeno">Ilustraciones y datos de ejercicios: Exercise data by <a href="https://repdb.co" target="_blank" rel="noopener nofollow">RepDB (repdb.co)</a>.</span>' +
     '<span class="pequeno">Figuras del mapa muscular: <a href="https://github.com/HichamELBSI/react-native-body-highlighter" target="_blank" rel="noopener">react-native-body-highlighter</a> · MIT · © 2022 ELABBASSI Hicham.</span></section>';
-  h += '<section class="col mini tenue" style="text-align:center;gap:2px"><span>Rutina · esquema v' + L.VERSION_ESQUEMA + " · funciona sin internet</span><span>Los datos no salen del teléfono salvo que guardes un respaldo.</span></section></main>";
+  h += '<section class="col mini tenue" style="text-align:center;gap:2px"><span>Rutina · esquema v' + L.VERSION_ESQUEMA + " · funciona sin internet</span><span>Los datos no salen del teléfono salvo que guardes un respaldo.</span><span>© 2026 Marcelo Espinosa · Todos los derechos reservados</span>" +
+    '<button class="btn texto recap-enlace" data-a="abrirRecap">Rutina Recap (beta)</button></section></main>';
   return h;
 }
 function ajusteNum(k, etiqueta, valor, ayuda) {
@@ -3319,7 +3906,7 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "adf63f45ff"; /*VERSION-APP*/
+const VERSION_APP = "4737ad5876"; /*VERSION-APP*/
 /* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin botón propio de
    instalar y, si se quita el ícono, se borran los datos. iPadOS se presenta como Mac: se reconoce por
    la pantalla táctil. El guardado y el respaldo son iguales que en Android. */
@@ -3641,6 +4228,12 @@ function bloqueo() {
 A.compartirKilos = compartirKilos;
 A.compartirMapa = compartirMapa;
 A.figura = accionFigura;
+A.objetivo = (el) => { const o = L.OBJETIVOS.indexOf(el.dataset.o) >= 0 ? el.dataset.o : null; cambiar((d) => { d.perfil.objetivo = o; }); };
+A.abrirRecap = abrirRecap;
+A.cerrarRecap = () => cerrarRecap(false);
+A.recapPaso = (el) => pasoRecap(+el.dataset.d);
+A.compartirRecap = compartirRecap;
+CAMBIOS.recapPeso = (el) => { visor.conPeso = !!el.checked; visor.dibujadoT = -1; pintarPieRecap(); };
 A.bloqueoReintentar = async () => { const b = $("#bloqueo"); if (b) b.remove(); arrancar(false); };
 A.bloqueoRobar = async () => {
   if (!await confirmar("Usar aquí", "La otra pestaña quedará en solo lectura y esta toma el control con los datos guardados.", "Usar aquí")) return;
@@ -3679,7 +4272,7 @@ async function avisoMigracion() {
 const renderBase = render;
 render = function (nuevaVista) { renderBase(nuevaVista); if (ui.vista === "ajustes") pintarRespaldos(); };
 window.addEventListener("error", (ev) => { console.error(ev.error || ev.message); });
-window.Rutina = { L: L, P: P, ui: ui, PWA: PWA, estado: () => estado, render: () => render(true) };   // para inspección y pruebas
+window.Rutina = { L: L, P: P, ui: ui, PWA: PWA, estado: () => estado, render: () => render(true), dibujarPantallaRecap: dibujarPantallaRecap, imagenRecap: imagenRecap };   // para inspección y pruebas
 iniciarPwa();
 arrancar(false);
 })();
