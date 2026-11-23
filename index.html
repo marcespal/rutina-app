@@ -17,8 +17,8 @@ if (/^https?:$/.test(location.protocol)) {
 </script>
 <!--
   Rutina · registro de gimnasio en un solo archivo HTML.
-  Sin dependencias, sin internet. Todo vive en este teléfono (IndexedDB) y,
-  si se conecta, en un archivo .json. Copia local de la sección «Gym».
+  Sin dependencias, sin internet. Todo vive en este teléfono (IndexedDB); el
+  respaldo .json lo guarda el usuario («Guardar respaldo»). Copia local de la sección «Gym».
 -->
 <style>
 :root{
@@ -96,7 +96,9 @@ h2{margin:0;font-size:17px;font-weight:600}
 .pildora.ok{color:var(--ok-ink);background:var(--ok-bg);border-color:transparent}
 .pildora.aviso{color:var(--warn-ink);background:var(--warn-bg);border-color:transparent}
 .pildora.local{color:var(--muted)}
-.pildora.boton{min-height:44px}
+.pildora.boton{min-height:44px;max-width:48vw;white-space:normal;text-align:left;line-height:1.15;padding:4px 12px;border-radius:16px}
+.pildora .lineas{display:flex;flex-direction:column;min-width:0}
+.pildora .l2{font-size:12px;font-weight:500}
 .pildora.compacta{min-height:44px;border-radius:22px;padding:0 10px;font-size:12px;max-width:100%}
 .ses-cab>.col{flex:1 1 auto}
 
@@ -1101,19 +1103,20 @@ return {
    PERSISTENCIA · adaptada de guardado.js (app de microciclos), a su vez
    derivado de persistencia-segura.js v1.0. Conserva:
      · GUARDA 1: en leer → decidir → escribir, una lectura fallida SALE; nunca escribe.
-     · GUARDA 2: nunca escribir un estado vacío sobre una copia o archivo con
-       contenido; si pasa en el archivo, se desvincula.
+     · GUARDA 2: nunca escribir un estado vacío sobre una copia con contenido.
      · GUARDA 3: una sola pestaña a la vez con Web Locks (ifAvailable; «usar
        aquí» roba el turno con confirmación y la otra queda en solo lectura).
      · Copia ilegible: autoguardado en pausa y rescate del texto crudo.
      · Respaldo rotativo de 3 versiones en IndexedDB antes de escribir.
    Cambios para esta app: un único documento (clave "estado") en una base con
-   nombre propio ("rutina-gym-v1": en Android, todos los HTML abiertos desde
-   Archivos comparten el origen content://media), almacén aparte de fotos
-   (Blob), diario síncrono en localStorage contra el cierre abrupto, archivo
-   «pendiente» que se reconecta con un toque (Chrome pide permiso en cada
-   apertura), huella para no preguntar de más al reconectar, la píldora nunca
-   dice «Guardado» sin archivo conectado, exportación completa con fotos.
+   nombre propio ("rutina-gym-v1": abierta desde Archivos, todos los HTML
+   comparten el origen content://media), almacén aparte de fotos (Blob),
+   diario síncrono en localStorage contra el cierre abrupto y exportación
+   completa con fotos.
+   Desde 2026-11-23 el respaldo es MANUAL e igual en Android e iPhone:
+   «Guardar respaldo» (menú Compartir o descarga). Ya no hay archivo .json
+   conectado; a quien lo tenía se le borra el vínculo recordado (nunca el
+   documento) y se le avisa una sola vez. La píldora nunca dice «Guardado».
    No toca el DOM salvo para descargar: avisos y preguntas los pone la interfaz.
    ═════════════════════════════════════════════════════════════════════════ */
 function crearPersistencia(cfg) {
@@ -1127,6 +1130,7 @@ function crearPersistencia(cfg) {
     estaVacio: (d) => !d,
     resumen: (d) => "contenido",
     firma: (d) => JSON.stringify(d),
+    creadoEn: (d) => (d && d.creado_en) || null,
     nombreArchivo: () => "rutina.json",
     /* preguntar(titulo, html, [{valor, texto, tono}]) → Promise<valor|null>; aviso(titulo, html) */
     preguntar: async () => null,
@@ -1137,24 +1141,24 @@ function crearPersistencia(cfg) {
     maxRespaldos: 3,
     intervaloRespaldo: 3 * 60000,
     debounce: 400,
-    debounceArchivo: 700,
-    tiposArchivo: [{ description: "Respaldo de Rutina (JSON)", accept: { "application/json": [".json"] } }]
+    diasAvisoRespaldo: 3
   }, cfg || {});
   const K = "estado";
+  const MS_DIA = 86400000;
   const esc = (s) => String(s == null ? "" : s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  let archivo = null, archivoPendiente = null;
   let sucio = false, activo = false, perdioTurno = false, almacenamientoOk = true;
   let ilegible = null;                  // { crudo, motivo }
-  let errorArchivo = null, errorLocal = null;
-  let tLocal = null, tArchivo = null, liberarTurno = null, ultimoRespaldoTs = 0;
+  let errorLocal = null;
+  let tLocal = null, liberarTurno = null, ultimoRespaldoTs = 0;
   let ultimo = { ts: null, destino: "" };
+  let ultimoExterno = null;             // último respaldo fuera del navegador (compartido o descargado)
+  let migracion = null;                 // { ts, avisado } si esta app tenía un .json conectado
   let vacioAceptado = null;
   /* Bitácora de diagnóstico: solo datos técnicos (nunca nombres, pesos ni registros). */
   const CLAVE_BIT = C.base + ":bitacora";
   let bitacora = [];
   try { bitacora = JSON.parse(localStorage.getItem(CLAVE_BIT) || "[]"); if (!Array.isArray(bitacora)) bitacora = []; } catch (e) { bitacora = []; }
-  let ultimoErrorArchivo = null, escriturasArchivo = 0;
   const detalleError = (e) => (e ? (e.name || "Error") + ": " + (e.message || String(e)) : "desconocido");
   function anotar(ev, e) {
     const x = { t: Date.now(), ev: String(ev) };
@@ -1229,7 +1233,7 @@ function crearPersistencia(cfg) {
   }
 
   /* ── diario síncrono (localStorage, clave propia de la app) ──────────────
-     IndexedDB es asíncrono: si Android mata la pestaña justo después de un
+     IndexedDB es asíncrono: si el sistema mata la pestaña justo después de un
      toque, lo último no alcanza a escribirse. Cada cambio deja además una
      copia SÍNCRONA aquí; se borra cuando IndexedDB confirma, y al arrancar
      se recupera si es más nueva que la copia. Si no cabe, se ignora. */
@@ -1271,7 +1275,7 @@ function crearPersistencia(cfg) {
   }
   function pausarPorIlegible(copia) {
     ilegible = { crudo: copia.crudo, motivo: copia.motivo };
-    clearTimeout(tLocal); clearTimeout(tArchivo);
+    clearTimeout(tLocal);
     avisar();
   }
 
@@ -1295,11 +1299,13 @@ function crearPersistencia(cfg) {
       const seqEscrita = secuencia;
       await escribir("documentos", K, { txt: JSON.stringify(d), ts: Date.now() });
       borrarDiario(seqEscrita);
+      if (errorLocal === "fallo") anotar("la copia del teléfono volvió a escribirse bien");
       errorLocal = null; almacenamientoOk = true;
-      if (!archivo) sucio = false;
+      sucio = false;
       ultimo = { ts: Date.now(), destino: "telefono" };
       return true;
     } catch (e) {
+      if (errorLocal !== "fallo") anotar("fallo al escribir la copia del teléfono", e);
       errorLocal = "fallo"; avisar();
       return false;
     }
@@ -1344,132 +1350,57 @@ function crearPersistencia(cfg) {
     return { ok };
   }
 
-  /* ── archivo vinculado (File System Access API) ── */
-  const hayApiArchivos = () => typeof window !== "undefined" && typeof window.showOpenFilePicker === "function" && typeof window.showSaveFilePicker === "function";
-  async function leerJSONde(h) {
-    const f = await h.getFile();
-    const t = await f.text();
-    if (!t.trim()) return null;
-    const d = parsear(t);
-    const v = C.validar(d);
-    if (!v.ok) throw new Error(v.mensaje);
-    return C.migrar(d);
+  /* ── respaldo externo: solo cuentan los compartidos y las descargas que salieron bien ── */
+  async function marcarRespaldoExterno() {
+    ultimoExterno = Date.now();
+    try { await escribir("meta", "ultimo_respaldo", ultimoExterno); } catch (e) { anotar("no se pudo anotar la fecha del respaldo", e); }
   }
-  async function permisoEscritura(h, pedir) {
-    try {
-      const q = await h.queryPermission({ mode: "readwrite" });
-      if (q === "granted") return true;
-      if (!pedir) { anotar("permiso al consultar: " + q); return false; }
-      const p = await h.requestPermission({ mode: "readwrite" });
-      if (p !== "granted") anotar("permiso al pedir: " + p);
-      return p === "granted";
-    } catch (e) { anotar("error al pedir permiso", e); return false; }
-  }
-  async function recordarArchivo(h) {
-    try { await escribir("meta", "archivo", h); anotar("archivo recordado para la próxima apertura"); }
-    catch (e) { anotar("no se pudo recordar el archivo (no habrá Reconectar al volver)", e); }
-  }
-  async function olvidarArchivo() { try { await borrar("meta", "archivo"); } catch (e) {} }
-  /* Solo cuentan como respaldo las escrituras al archivo y las exportaciones. */
-  async function marcarRespaldoExterno() { try { await escribir("meta", "ultimo_respaldo", Date.now()); } catch (e) {} }
-  async function ultimoRespaldoExterno() { try { return (await leer("meta", "ultimo_respaldo")) || null; } catch (e) { return null; } }
-  /* Huella del último contenido que el archivo tuvo según esta app (escrito o leído).
-     Al reconectar, si el archivo sigue con esa huella, nadie lo cambió por fuera:
-     lo local es lo más nuevo y se escribe sin preguntar. Si no, se pregunta. */
-  function huella(d) {
-    let t; try { t = C.firma(C.migrar(d)); } catch (e) { t = C.firma(d); }   // misma forma al escribir y al leer
-    let h = 0x811c9dc5;
-    for (let i = 0; i < t.length; i++) { h ^= t.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
-    return t.length + ":" + h.toString(16);
-  }
-  async function anotarHuella(d) { try { await escribir("meta", "huella_archivo", d ? huella(d) : null); } catch (e) {} }
-  async function huellaAnotada() { try { return (await leer("meta", "huella_archivo")) || null; } catch (e) { return null; } }
+  async function leerUltimoRespaldo() { try { return (await leer("meta", "ultimo_respaldo")) || null; } catch (e) { return null; } }
 
-  /* GUARDA 2 · nunca escribir vacío sobre contenido. */
-  async function guardarArchivo() {
-    if (!archivo || perdioTurno || ilegible) return false;
-    const d = C.documento();
-    if (!d) return false;
-    if (C.estaVacio(d) && !vacioIntencional(d)) {
-      let previo = null, fallo = false;
-      try { previo = await leerJSONde(archivo); } catch (e) { fallo = true; }
-      if (fallo) {
-        errorArchivo = "No se pudo leer el archivo";
-        C.aviso("No se escribió el archivo", "No se pudo leer <b>" + esc(archivo.name) + "</b> y en pantalla no hay datos, así que no se escribió nada. El archivo quedó intacto.");
-        avisar(); return false;
-      }
-      if (previo && !C.estaVacio(previo)) {
-        const nom = archivo.name;
-        archivo = null; await olvidarArchivo();       // desvincular: si no, el aviso se repite sin fin
-        C.aviso("Se protegió tu archivo", "<b>" + esc(nom) + "</b> contiene " + esc(C.resumen(previo)) +
-          " y esta pantalla está vacía. No se escribió nada y se desconectó el archivo.<br><br>Ábrelo de nuevo desde Ajustes para cargar sus datos.");
-        avisar(); return false;
-      }
-    }
-    let paso = "abrir el archivo para escribir";
+  /* ── migración: versiones anteriores podían conectar un archivo .json (File System
+     Access). Si quedó recordado (meta "archivo") o su huella ("huella_archivo"), se
+     olvidan SIN tocar el documento, que ya está completo aquí, y se avisa una vez.
+     La fecha de la última escritura al archivo ya está en meta "ultimo_respaldo" y
+     se conserva: no dispara el aviso de respaldo de inmediato.
+     Orden: primero la marca del aviso, después el borrado; si algo falla a mitad,
+     al próximo arranque se reintenta y el aviso igual sale. ── */
+  async function migrarArchivoConectado() {
+    try { migracion = (await leer("meta", "migracion_archivo")) || null; } catch (e) { migracion = null; }
+    let handle = null, huella = null;
+    try { handle = await leer("meta", "archivo"); } catch (e) { handle = null; }
+    try { huella = await leer("meta", "huella_archivo"); } catch (e) { huella = null; }
+    if (!handle && !huella) return;
     try {
-      const texto = JSON.stringify(d, null, 1);
-      const w = await archivo.createWritable();
-      paso = "escribir"; await w.write(texto);
-      paso = "cerrar el archivo"; await w.close();
-      /* Comprobar que lo escrito quedó: hay teléfonos que aceptan la escritura
-         y dejan el archivo como estaba. */
-      paso = "comprobar lo escrito";
-      const esperado = new Blob([texto]).size;
-      const tam = (await archivo.getFile()).size;
-      if (tam !== esperado) throw new Error("el archivo quedó con " + tam + " bytes y se escribieron " + esperado);
-      escriturasArchivo += 1;
-      if (errorArchivo) anotar("el archivo volvió a escribirse bien");
-      else if (escriturasArchivo === 1) anotar("primera escritura de esta apertura: ok (" + esperado + " bytes)");
-      sucio = false; errorArchivo = null; ultimoErrorArchivo = null;
-      ultimo = { ts: Date.now(), destino: "archivo" };
-      await marcarRespaldoExterno();
-      await anotarHuella(d);
-      avisar();
-      return true;
-    } catch (e) {
-      const primera = !errorArchivo;
-      errorArchivo = "No se pudo escribir el archivo";
-      ultimoErrorArchivo = { cuando: new Date().toLocaleString("es"), paso: paso, detalle: detalleError(e) };
-      anotar("fallo al " + paso, e);
-      if (primera) C.aviso("No se pudo escribir el archivo",
-        "Falló al <b>" + esc(paso) + "</b>: " + esc(detalleError(e)) + ".<br><br>Lo anotado sigue guardado en este teléfono. " +
-        "En Ajustes toca <b>Exportar respaldo</b> para tener una copia, y <b>Diagnóstico</b> para copiar el detalle.");
-      avisar(); return false;
-    }
+      if (!migracion) { migracion = { ts: Date.now(), avisado: false }; await escribir("meta", "migracion_archivo", migracion); }
+      await borrar("meta", "archivo");
+      await borrar("meta", "huella_archivo");
+      anotar("migración: se olvidó el archivo .json conectado (el documento no se tocó)");
+    } catch (e) { anotar("migración: no se pudo olvidar el archivo conectado", e); }
   }
-  /* Escribir ya y comprobar (botón «Probar el archivo»). */
-  async function probarArchivo() {
-    if (!archivo) return { ok: false, motivo: archivoPendiente ? "pendiente" : "sin-archivo" };
-    clearTimeout(tArchivo);
-    errorArchivo = null;                 // que un fallo vuelva a mostrar su aviso
-    await guardarLocal();
-    return { ok: await guardarArchivo() };
+  async function marcarMigracionAvisada() {
+    if (!migracion || migracion.avisado) return;
+    migracion = Object.assign({}, migracion, { avisado: true, avisado_en: Date.now() });
+    try { await escribir("meta", "migracion_archivo", migracion); } catch (e) { anotar("migración: no se pudo marcar el aviso", e); }
   }
+
   async function diagnostico() {
     const r = {
       app: "rutina.html", cuando: new Date().toString(),
       direccion: (location.protocol + "//" + location.host + location.pathname).slice(0, 90),
       origen: location.origin, contextoSeguro: !!window.isSecureContext, navegador: navigator.userAgent,
-      apiArchivos: hayApiArchivos(), webLocks: !!navigator.locks, indexedDB: almacenamientoOk,
-      persistente: null, cuotaMB: null,
-      archivo: archivo ? "conectado" : archivoPendiente ? "pendiente de reconectar" : "ninguno",
-      permiso: null, tamanoArchivoBytes: null,
+      webLocks: !!navigator.locks, indexedDB: almacenamientoOk,
+      persistente: null, cuotaMB: null, usoMB: null,
+      compartirArchivos: puedeCompartirArchivos(),
       estado: estadoGuardado().texto, cambiosSinGuardar: sucio, soloLectura: perdioTurno, copiaIlegible: !!ilegible,
-      escriturasEnEstaApertura: escriturasArchivo,
       ultimoGuardado: ultimo.ts ? new Date(ultimo.ts).toLocaleString("es") + " → " + ultimo.destino : null,
-      ultimoErrorArchivo: ultimoErrorArchivo,
+      ultimoRespaldo: ultimoExterno ? new Date(ultimoExterno).toLocaleString("es") : "nunca",
+      migracionArchivo: migracion ? { cuando: new Date(migracion.ts).toLocaleString("es"), avisado: !!migracion.avisado } : null,
       bitacora: bitacora.slice(-25).map((x) => new Date(x.t).toLocaleString("es") + " · " + x.ev + (x.err ? " · " + x.err : ""))
     };
     try {
       if (navigator.storage && navigator.storage.persisted) r.persistente = await navigator.storage.persisted();
-      if (navigator.storage && navigator.storage.estimate) r.cuotaMB = Math.round(((await navigator.storage.estimate()).quota || 0) / 1048576);
+      if (navigator.storage && navigator.storage.estimate) { const est = await navigator.storage.estimate(); r.cuotaMB = Math.round((est.quota || 0) / 1048576); r.usoMB = Math.round((est.usage || 0) / 104857.6) / 10; }
     } catch (e) { /* sin datos de almacenamiento */ }
-    const h = archivo || archivoPendiente;
-    if (h) {
-      try { r.permiso = await h.queryPermission({ mode: "readwrite" }); } catch (e) { r.permiso = detalleError(e); }
-      try { r.tamanoArchivoBytes = (await h.getFile()).size; } catch (e) { r.tamanoArchivoBytes = detalleError(e); }
-    }
     return r;
   }
 
@@ -1481,21 +1412,11 @@ function crearPersistencia(cfg) {
     avisar();
     if (ilegible) return;
     clearTimeout(tLocal);
-    tLocal = setTimeout(async () => {
-      const ok = await guardarLocal();
-      if (archivo) {
-        clearTimeout(tArchivo);
-        tArchivo = setTimeout(() => { guardarArchivo(); }, C.debounceArchivo);
-      }
-      if (ok && !archivo) sucio = false;
-      avisar();
-    }, C.debounce);
+    tLocal = setTimeout(async () => { await guardarLocal(); avisar(); }, C.debounce);
   }
   async function guardarAhora() {
-    clearTimeout(tLocal); clearTimeout(tArchivo);
+    clearTimeout(tLocal);
     const ok = await guardarLocal();
-    if (archivo) return (await guardarArchivo()) && ok;
-    if (ok) sucio = false;
     avisar();
     return ok;
   }
@@ -1507,134 +1428,13 @@ function crearPersistencia(cfg) {
     C.cargarDocumento(d);
   }
 
-  /* Decide con el usuario qué conservar cuando el archivo y el teléfono difieren.
-     Devuelve "archivo" | "telefono" | null (cancelado). */
-  async function elegirVersion(nombre, enArchivo) {
-    const actual = C.documento();
-    if (!enArchivo || C.estaVacio(enArchivo)) return "telefono";
-    if (!actual || C.estaVacio(actual)) return "archivo";
-    if (C.firma(actual) === C.firma(enArchivo)) return "archivo";
-    return C.preguntar("¿Qué datos conservas?",
-      "<b>" + esc(nombre) + "</b> tiene <b>" + esc(C.resumen(enArchivo)) + "</b>.<br>Este teléfono tiene <b>" + esc(C.resumen(actual)) +
-      "</b>.<br><br>Lo que no elijas queda en los respaldos de Ajustes.",
-      [{ valor: "archivo", texto: "Usar el archivo", tono: "prim" }, { valor: "telefono", texto: "Usar lo de este teléfono" }, { valor: null, texto: "Cancelar" }]);
+  /* ── guardar respaldo (exportar) y restaurar (importar): siempre disponibles ── */
+  function puedeCompartirArchivos() {
+    try {
+      if (typeof navigator === "undefined" || typeof navigator.share !== "function" || typeof navigator.canShare !== "function" || typeof File !== "function") return false;
+      return !!navigator.canShare({ files: [new File(["{}"], "prueba.json", { type: "application/json" })] });
+    } catch (e) { return false; }
   }
-
-  /* GUARDA 1 · abrir un archivo existente. Una lectura fallida nunca termina en escritura. */
-  async function vincular() {
-    if (perdioTurno) return { ok: false, motivo: "solo-lectura" };
-    if (!hayApiArchivos()) return { ok: false, motivo: "sin-api" };
-    let h;
-    try { [h] = await window.showOpenFilePicker({ types: C.tiposArchivo, multiple: false }); }
-    catch (e) { return { ok: false, motivo: "cancelado" }; }
-    let d = null, fallo = false, motivo = "";
-    try { d = await leerJSONde(h); } catch (e) { fallo = true; motivo = e.message; }
-    if (fallo) {
-      anotar("abrir existente: no se pudo leer · " + motivo);
-      C.aviso("No se conectó el archivo", "No se pudo leer <b>" + esc(h.name) + "</b> (" + esc(motivo) + "). No se conectó ni se escribió nada: su contenido quedó intacto.");
-      return { ok: false, motivo: "ilegible" };       // ← salir, no continuar
-    }
-    const eleccion = await elegirVersion(h.name, d);
-    if (!eleccion) return { ok: false, motivo: "cancelado" };
-    if (!await permisoEscritura(h, true)) {
-      C.aviso("Sin permiso", "El navegador no dio permiso para escribir en <b>" + esc(h.name) + "</b>. No se conectó.");
-      return { ok: false, motivo: "sin-permiso" };
-    }
-    let escribirYa = true;
-    if (eleccion === "archivo" && d) {
-      await reemplazarPor(d); escribirYa = false;
-    } else if (d && !C.estaVacio(d)) {
-      await respaldar(d, true);                        // lo del archivo queda recuperable
-    }
-    archivo = h; archivoPendiente = null; errorArchivo = null;
-    await recordarArchivo(h);
-    await guardarLocal();
-    if (escribirYa) await guardarArchivo(); else { sucio = false; await anotarHuella(d); }
-    avisar();
-    return { ok: true, cargado: !escribirYa };
-  }
-
-  /* Crear un archivo nuevo y conectarlo. */
-  async function archivoNuevo() {
-    if (perdioTurno) return { ok: false, motivo: "solo-lectura" };
-    const doc = C.documento();
-    if (!doc) return { ok: false, motivo: "sin-documento" };
-    if (!hayApiArchivos()) return { ok: false, motivo: "sin-api" };
-    let h;
-    try { h = await window.showSaveFilePicker({ suggestedName: C.nombreArchivo(), types: C.tiposArchivo }); }
-    catch (e) { if (e && e.name !== "AbortError") anotar("crear archivo: falló el selector", e); return { ok: false, motivo: "cancelado" }; }
-    anotar("crear archivo: elegido");
-    let previo = null, fallo = false;
-    try { previo = await leerJSONde(h); } catch (e) { fallo = true; anotar("crear archivo: no se pudo leer el elegido", e); }
-    if (fallo) {
-      C.aviso("No se conectó el archivo", "<b>" + esc(h.name) + "</b> ya existe y no se pudo leer. Para no perder lo que tenga, no se escribió nada. Elige otro nombre.");
-      return { ok: false, motivo: "ilegible" };
-    }
-    if (previo && !C.estaVacio(previo)) {
-      const r = await elegirVersion(h.name, previo);
-      if (!r) return { ok: false, motivo: "cancelado" };
-      if (r === "archivo") {
-        archivoPendiente = null; await reemplazarPor(previo); archivo = h; await recordarArchivo(h);
-        await guardarLocal(); sucio = false; await anotarHuella(previo); avisar();
-        return { ok: true, cargado: true };
-      }
-      await respaldar(previo, true);
-    }
-    archivo = h; archivoPendiente = null; errorArchivo = null;
-    await recordarArchivo(h);
-    const ok = await guardarArchivo();
-    avisar();
-    return { ok };
-  }
-
-  /* Al arrancar: el archivo recordado queda pendiente salvo que ya tenga permiso. */
-  async function reconectarRecordado() {
-    let h = null;
-    try { h = await leer("meta", "archivo"); } catch (e) { h = null; anotar("al abrir: no se pudo leer el archivo recordado", e); }
-    if (!h || typeof h.getFile !== "function") { anotar("al abrir: sin archivo recordado"); return; }
-    anotar("al abrir: hay archivo recordado");
-    archivoPendiente = h;
-    if (await permisoEscritura(h, false)) await reconectar(true);
-    avisar();
-  }
-  /* Reconectar con un toque (requestPermission lo exige). GUARDA 1: si no se lee, no se conecta. */
-  async function reconectar(sinGesto) {
-    const h = archivoPendiente;
-    if (!h || perdioTurno) return { ok: false, motivo: "sin-pendiente" };
-    if (!await permisoEscritura(h, !sinGesto)) return { ok: false, motivo: "sin-permiso" };
-    let enArchivo = null, fallo = false, motivo = "";
-    try { enArchivo = await leerJSONde(h); } catch (e) { fallo = true; motivo = e.message; }
-    if (fallo) {
-      anotar("reconectar: no se pudo leer el archivo · " + motivo);
-      C.aviso("No se reconectó el archivo", "No se pudo leer <b>" + esc(h.name) + "</b> (" + esc(motivo) + "). No se conectó ni se escribió nada. Puedes olvidarlo y conectar otro desde Ajustes.");
-      avisar(); return { ok: false, motivo: "ilegible" };
-    }
-    /* El archivo quedó como lo dejó esta app la última vez: lo anotado desde
-       entonces es lo más nuevo y se escribe sin preguntar. Si cambió por fuera
-       (otro teléfono, otra copia), se pregunta qué conservar. */
-    const sinCambiosFuera = !!enArchivo && (await huellaAnotada()) === huella(enArchivo);
-    const eleccion = sinCambiosFuera ? "telefono" : await elegirVersion(h.name, enArchivo);
-    if (!eleccion) return { ok: false, motivo: "cancelado" };
-    archivoPendiente = null;
-    if (eleccion === "archivo" && enArchivo) {
-      await reemplazarPor(enArchivo);
-      archivo = h; errorArchivo = null;
-      await guardarLocal(); sucio = false; await anotarHuella(enArchivo); avisar();
-      return { ok: true, cargado: true };
-    }
-    if (enArchivo && !C.estaVacio(enArchivo) && !sinCambiosFuera) await respaldar(enArchivo, true);
-    archivo = h; errorArchivo = null;
-    await guardarLocal();
-    const ok = await guardarArchivo();
-    avisar();
-    return { ok };
-  }
-  async function desvincular() {
-    archivo = null; archivoPendiente = null; errorArchivo = null;
-    await olvidarArchivo(); await anotarHuella(null); avisar();
-  }
-
-  /* ── exportar e importar (siempre disponibles) ── */
   async function documentoExportable() {
     const d = C.documento();
     if (!d) return null;
@@ -1646,27 +1446,33 @@ function crearPersistencia(cfg) {
     } catch (e) { /* sin fotos: el resto se exporta igual */ }
     return out;
   }
+  /* compartir = true: menú Compartir del teléfono (Drive, Archivos, iCloud…) si acepta archivos;
+     si no, descarga. Cerrar el menú no es error ni cuenta como respaldo. */
   async function exportar(compartir) {
     const d = await documentoExportable();
     if (!d) return { ok: false };
     const nombre = C.nombreArchivo(true), texto = JSON.stringify(d, null, 1);
-    if (compartir && typeof navigator !== "undefined" && navigator.share && typeof File === "function") {
-      try {
-        const f = new File([texto], nombre, { type: "application/json" });
-        if (!navigator.canShare || navigator.canShare({ files: [f] })) {
+    if (compartir && puedeCompartirArchivos()) {
+      let f = null;
+      try { f = new File([texto], nombre, { type: "application/json" }); } catch (e) { f = null; }
+      if (f && navigator.canShare({ files: [f] })) {
+        try {
           await navigator.share({ files: [f], title: "Respaldo de Rutina" });
           await marcarRespaldoExterno(); ultimo = { ts: Date.now(), destino: "compartido" }; avisar();
           return { ok: true, via: "compartir" };
+        } catch (e) {
+          if (e && e.name === "AbortError") return { ok: false, motivo: "cancelado" };
+          anotar("compartir respaldo falló; se descarga", e);
         }
-      } catch (e) {
-        if (e && e.name === "AbortError") return { ok: false, motivo: "cancelado" };
       }
     }
     C.descargarTexto(nombre, texto);
     await marcarRespaldoExterno(); ultimo = { ts: Date.now(), destino: "descarga" }; avisar();
     return { ok: true, via: "descarga" };
   }
-  /* GUARDA 1 en importar: si no se puede leer, no cambia nada. */
+  /* GUARDA 1 en importar: si no se puede leer, no cambia nada. Acepta los respaldos
+     exportados (con fotos) y los .json que escribía la versión con archivo conectado:
+     es el mismo documento. */
   async function importar(file) {
     if (perdioTurno) return { ok: false, motivo: "solo-lectura" };
     let d = null, motivo = "";
@@ -1676,13 +1482,14 @@ function crearPersistencia(cfg) {
       if (!v.ok) throw new Error(v.mensaje);
     } catch (e) { d = null; motivo = e.message; }
     if (!d) {
-      C.aviso("No se importó el archivo", "No se pudo leer <b>" + esc(file.name) + "</b> (" + esc(motivo) + "). No se cambió nada.");
+      anotar("restaurar: no se pudo leer el archivo · " + motivo);
+      C.aviso("No se restauró el respaldo", "No se pudo leer <b>" + esc(file.name) + "</b> (" + esc(motivo) + "). No se cambió nada.");
       return { ok: false, motivo: "ilegible" };
     }
     const fotos = d.fotos && typeof d.fotos === "object" ? d.fotos : {};
     let doc;
     try { doc = C.migrar(d); delete doc.fotos; delete doc.exportado_en; }
-    catch (e) { C.aviso("No se importó el archivo", "El contenido no se pudo interpretar (" + esc(e.message) + "). No se cambió nada."); return { ok: false }; }
+    catch (e) { C.aviso("No se restauró el respaldo", "El contenido no se pudo interpretar (" + esc(e.message) + "). No se cambió nada."); return { ok: false }; }
     if (ilegible) {
       const r = await C.preguntar("Reemplazar la copia dañada", "La copia de este teléfono no se puede leer. Se descargará su texto crudo y se reemplazará por <b>" + esc(C.resumen(doc)) + "</b>.",
         [{ valor: "si", texto: "Descargar y reemplazar", tono: "prim" }, { valor: null, texto: "Cancelar" }]);
@@ -1693,7 +1500,7 @@ function crearPersistencia(cfg) {
       const actual = C.documento();
       if (actual && !C.estaVacio(actual) && C.firma(actual) !== C.firma(doc)) {
         const r = await C.preguntar("¿Reemplazar lo de este teléfono?", "El respaldo tiene <b>" + esc(C.resumen(doc)) + "</b>.<br>Este teléfono tiene <b>" + esc(C.resumen(actual)) +
-          "</b>.<br><br>Lo de ahora queda en los respaldos de Ajustes.", [{ valor: "si", texto: "Reemplazar con el respaldo", tono: "prim" }, { valor: null, texto: "Cancelar" }]);
+          "</b>.<br><br>Lo de ahora queda en los respaldos internos (Ajustes → Guardado), así que se puede volver.", [{ valor: "si", texto: "Reemplazar con el respaldo", tono: "prim" }, { valor: null, texto: "Cancelar" }]);
         if (!r) return { ok: false, motivo: "cancelado" };
       }
     }
@@ -1704,6 +1511,7 @@ function crearPersistencia(cfg) {
     }
     aceptarVacio();
     const ok = await guardarAhora();
+    anotar("restaurar: respaldo cargado" + (nFotos ? " con " + nFotos + " fotos" : ""));
     avisar();
     return { ok, fotos: nFotos };
   }
@@ -1745,7 +1553,7 @@ function crearPersistencia(cfg) {
       }).catch(() => {
         if (!activo) return;
         activo = false; perdioTurno = true;
-        clearTimeout(tLocal); clearTimeout(tArchivo);
+        clearTimeout(tLocal);
         avisar(); C.alPerderTurno();
       });
     });
@@ -1756,9 +1564,11 @@ function crearPersistencia(cfg) {
     op = op || {};
     if (!await pedirTurno(!!op.robar)) return { ok: false, estado: "otra-pestana" };
     activo = true; perdioTurno = false;
-    try { await db(); } catch (e) { almacenamientoOk = false; avisar(); return { ok: true, estado: "sin-almacenamiento" }; }
+    try { await db(); } catch (e) { almacenamientoOk = false; anotar("al abrir: IndexedDB no disponible", e); avisar(); return { ok: true, estado: "sin-almacenamiento" }; }
+    await migrarArchivoConectado();
+    ultimoExterno = await leerUltimoRespaldo();
     const c = await leerCopia();
-    if (c.estado === "ilegible") { pausarPorIlegible(c); return { ok: true, estado: "ilegible", motivo: c.motivo }; }
+    if (c.estado === "ilegible") { anotar("al abrir: copia ilegible · " + c.motivo); pausarPorIlegible(c); return { ok: true, estado: "ilegible", motivo: c.motivo }; }
     /* Lo anotado justo antes de que se cerrara la pestaña: el diario, si es más nuevo.
        Guarda 2: un diario vacío nunca reemplaza una copia con contenido. */
     const j = leerDiario();
@@ -1768,10 +1578,10 @@ function crearPersistencia(cfg) {
       if (c.estado === "ok") await respaldar(c.doc, true);
       C.cargarDocumento(j.doc);
       if (await guardarLocal()) borrarDiario();
+      anotar("al abrir: se recuperó el diario");
     } else if (j) borrarDiario();
-    if (c.estado === "vacia" && !usarDiario) { await reconectarRecordado(); return { ok: true, estado: "nuevo" }; }
+    if (c.estado === "vacia" && !usarDiario) return { ok: true, estado: "nuevo" };
     if (!usarDiario) C.cargarDocumento(c.doc);
-    await reconectarRecordado();
     return { ok: true, estado: "cargado", recuperado: usarDiario };
   }
 
@@ -1781,29 +1591,39 @@ function crearPersistencia(cfg) {
   window.addEventListener("pagehide", alOcultar);
   document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") alOcultar(); });
 
-  /* Lo que muestra la píldora. Sin archivo conectado nunca dice «Guardado». */
+  /* Días desde el último respaldo externo (o desde que se creó el documento, si nunca hubo). */
+  function diasSinRespaldo() {
+    const d = C.documento();
+    const base = ultimoExterno || C.creadoEn(d) || Date.now();
+    return Math.max(0, Math.floor((Date.now() - base) / MS_DIA));
+  }
+  const respaldoVencido = () => { const d = C.documento(); return !!d && !C.estaVacio(d) && diasSinRespaldo() >= C.diasAvisoRespaldo; };
+  function haceTexto(ts) {
+    const dias = Math.floor((Date.now() - ts) / MS_DIA);
+    return dias <= 0 ? "hoy" : dias === 1 ? "ayer" : "hace " + dias + " días";
+  }
+  /* Lo que muestra la píldora. Nunca dice «Guardado»: los datos están en el teléfono y el
+     respaldo lo guarda el usuario. Tono de aviso pasados los días de aviso sin respaldo. */
   function estadoGuardado() {
     if (perdioTurno) return { tono: "aviso", texto: "Solo lectura", accion: "turno" };
     if (!almacenamientoOk) return { tono: "aviso", texto: "Sin almacenamiento", accion: "ajustes" };
     if (ilegible) return { tono: "aviso", texto: "Autoguardado en pausa", accion: "ajustes" };
     if (errorLocal === "fallo") return { tono: "aviso", texto: "No se pudo guardar", accion: "ajustes" };
-    if (archivo) {
-      if (errorArchivo) return { tono: "aviso", texto: errorArchivo, accion: "ajustes" };
-      if (sucio) return { tono: "local", texto: "Guardando…", accion: "ajustes" };
-      return { tono: "ok", texto: "Guardado", accion: "ajustes" };
-    }
-    if (archivoPendiente) return { tono: "aviso", texto: "Reconectar archivo", accion: "reconectar" };
-    return { tono: "local", texto: sucio ? "Guardando en el teléfono…" : "Solo en este teléfono", accion: "ajustes" };
+    if (sucio) return { tono: "local", texto: "Guardando en el teléfono…", corto: "Guardando…", accion: "ajustes" };
+    const tono = respaldoVencido() ? "aviso" : "local";
+    if (!ultimoExterno) return { tono, texto: "Sin respaldo aún", corto: "Sin respaldo", accion: "ajustes" };
+    return { tono, texto: "En el teléfono · respaldo " + haceTexto(ultimoExterno), corto: "Respaldo " + haceTexto(ultimoExterno), accion: "ajustes" };
   }
 
   return {
-    archivo: () => archivo, pendiente: () => archivoPendiente, sucio: () => sucio, soloLectura: () => perdioTurno,
+    sucio: () => sucio, soloLectura: () => perdioTurno,
     ilegible: () => ilegible && { motivo: ilegible.motivo }, almacenamientoOk: () => almacenamientoOk,
-    ultimoGuardado: () => Object.assign({}, ultimo), estadoGuardado, hayApiArchivos,
-    iniciar, tocar, guardarAhora, guardarLocal, guardarArchivo, aceptarVacio,
-    vincular, archivoNuevo, reconectar, desvincular, exportar, importar,
-    probarArchivo, diagnostico, errorArchivoDetalle: () => ultimoErrorArchivo,
-    respaldos, textoRespaldo, restaurarRespaldo, ultimoRespaldoExterno,
+    ultimoGuardado: () => Object.assign({}, ultimo), estadoGuardado,
+    ultimoRespaldo: () => ultimoExterno, diasSinRespaldo, respaldoVencido, puedeCompartirArchivos,
+    avisoMigracionPendiente: () => !!(migracion && !migracion.avisado), marcarMigracionAvisada,
+    iniciar, tocar, guardarAhora, guardarLocal, aceptarVacio,
+    exportar, importar, diagnostico,
+    respaldos, textoRespaldo, restaurarRespaldo,
     rescatarIlegible, liberarIlegible, empezarDeCero,
     guardarFoto, leerFoto, borrarFoto
   };
@@ -1837,8 +1657,8 @@ let estado = null;                       // el documento (serializable)
 const ui = {
   vista: "inicio", params: {}, mes: null, diaSel: null, tabEj: "ejercicios", buscar: "", grupo: null, verRetirados: false,
   semana: null, ejGrafico: null, abierto: {}, edicion: null, rirFila: null, rutina: null, pesoEdit: null, pesoRango: 90,
-  persistente: undefined, ultimoRespaldo: null, ocultarPersist: false, fotoPendiente: null, quitarFoto: false,
-  descansoAvisado: null, bienvenida: false, verSesiones: 15, ultimoPendiente: null, ocultarInstalar: false
+  persistente: undefined, fotoPendiente: null, quitarFoto: false,
+  descansoAvisado: null, bienvenida: false, verSesiones: 15, ocultarInstalar: false
 };
 const MS_DIA = 86400000;
 const hoy = () => L.fechaLocal();
@@ -1910,7 +1730,7 @@ function toast(texto, deshacer) {
 
 /* ── persistencia ── */
 /* Enganche opcional para demo-redes.html: con window.RUTINA_CONFIG = { demo: true, base: "otra-base" }
-   usa otra base IndexedDB (nunca la real) y no muestra los avisos de archivo/respaldo. Sin él, nada cambia. */
+   usa otra base IndexedDB (nunca la real) y no muestra los avisos de respaldo ni de instalar. Sin él, nada cambia. */
 const CFG = typeof window !== "undefined" && window.RUTINA_CONFIG && typeof window.RUTINA_CONFIG === "object" ? window.RUTINA_CONFIG : {};
 const DEMO = CFG.demo === true && typeof CFG.base === "string" && /^[a-z0-9-]{3,40}$/.test(CFG.base) && CFG.base !== "rutina-gym-v1";
 const P = crearPersistencia({
@@ -1925,15 +1745,16 @@ const P = crearPersistencia({
   alPerderTurno: () => render()
 });
 function alCambiarGuardado() {
-  const u = P.ultimoGuardado();
-  if (u.ts && (u.destino === "archivo" || u.destino === "descarga" || u.destino === "compartido")) ui.ultimoRespaldo = Math.max(ui.ultimoRespaldo || 0, u.ts);
-  const pend = !!(P.pendiente() && !P.archivo());
-  if (pend !== ui.ultimoPendiente) { ui.ultimoPendiente = pend; render(); return; }
   document.querySelectorAll("[data-pildora]").forEach((el) => { el.outerHTML = pildora(el.getAttribute("data-pildora") === "c"); });
 }
+/* Píldora: dónde están los datos y cuándo fue el último respaldo. Nunca «Guardado». En la
+   cabecera de la sesión (compacta) va el texto corto. */
 function pildora(compacta) {
   const g = P.estadoGuardado();
-  return '<button class="pildora ' + (compacta ? "compacta " : "boton ") + g.tono + '" data-pildora="' + (compacta ? "c" : "n") + '" data-a="pildora" data-accion="' + g.accion + '" aria-label="Estado del guardado: ' + esc(g.texto) + '"><span class="punto"></span>' + esc(g.texto) + "</button>";
+  const partes = g.texto.split(" · ");
+  const t = compacta ? esc(g.corto || g.texto)
+    : partes.length > 1 ? '<span class="lineas"><span>' + esc(partes[0]) + '</span><span class="l2">' + esc(partes.slice(1).join(" · ")) + "</span></span>" : esc(g.texto);
+  return '<button class="pildora ' + (compacta ? "compacta " : "boton ") + g.tono + '" data-pildora="' + (compacta ? "c" : "n") + '" data-a="pildora" data-accion="' + g.accion + '" aria-label="Estado del guardado: ' + esc(g.texto) + '"><span class="punto"></span>' + t + "</button>";
 }
 /** Todo cambio pasa por aquí: muta, autoguarda y repinta. */
 function cambiar(fn, sinRender) {
@@ -2051,15 +1872,11 @@ function nav() {
   return '<nav class="nav" aria-label="Navegación">' + it.map((x) => '<button data-a="ir" data-v="' + x[0] + '"' + (actual === x[0] ? ' aria-current="page"' : "") +
     '><span class="p">' + ic(x[0], 22, 1.75) + "</span>" + x[1] + "</button>").join("") + "</nav>";
 }
-/** Franjas fijas arriba: archivo por reconectar (cada apertura en Android), solo lectura, sin almacenamiento. */
+/** Franjas fijas arriba: solo lectura, sin almacenamiento. */
 function franjas() {
   let h = "";
   if (P.soloLectura()) h += franja("La app se abrió en otra pestaña", "Esta quedó en solo lectura para que no se pisen los datos.", '<button class="btn" data-a="recargar">Recargar</button>');
-  else if (P.pendiente() && !P.archivo()) {
-    h += franja("Toca para reconectar " + esc(P.pendiente().name || "el archivo"),
-      "Puedes seguir anotando: queda en el teléfono y se escribe en el archivo al reconectar.", '<button class="btn prim" data-a="reconectar">Reconectar</button>');
-  }
-  if (!P.almacenamientoOk()) h += franja("El almacenamiento del navegador no está disponible", "Lo que anotes se perderá al cerrar. Exporta un respaldo desde Ajustes.", '<button class="btn" data-a="ir" data-v="ajustes">Ajustes</button>', true);
+  if (!P.almacenamientoOk()) h += franja("El almacenamiento del navegador no está disponible", "Lo que anotes se perderá al cerrar. Toca «Guardar respaldo» en Ajustes.", '<button class="btn" data-a="ir" data-v="ajustes">Ajustes</button>', true);
   return h;
 }
 function franja(titulo, detalle, boton, peligro) {
@@ -2119,24 +1936,14 @@ function avisosInicio(c) {
     h += '<div class="nota" role="status">' + ic("reloj") + '<div class="cuerpo"><b>' + esc(c.textoAviso.titulo) + "</b><span>" + esc(c.textoAviso.detalle) +
       (toca ? " Cuando puedas, " + esc(toca.nombre) + " está lista para empezar." : " Cuando puedas, aquí estamos.") + "</span></div></div>";
   }
-  if (DEMO) return h;   // demo de redes: sin avisos de archivo ni de respaldo
-  const conDatos = !L.estaVacio(estado);
-  if (!P.archivo() && !P.pendiente() && P.hayApiArchivos()) {
-    h += '<div class="nota">' + ic("archivo") + '<div class="cuerpo"><b>Tus datos solo están en este teléfono</b><span class="pequeno">Chrome puede borrarlos si falta espacio. Conecta un archivo .json y se guardará ahí solo.</span>' +
-      '<div class="acciones"><button class="btn prim" data-a="archivoNuevo">Crear archivo</button><button class="btn" data-a="vincular">Abrir uno</button></div></div></div>';
-  }
-  const base = ui.ultimoRespaldo || estado.creado_en || Date.now();
-  /* Sin archivo conectable (iPhone, Firefox…) el respaldo es manual: se recuerda antes. */
-  const sinArchivo = !P.hayApiArchivos(), compartible = typeof navigator !== "undefined" && !!navigator.share;
-  if (conDatos && Date.now() - base > (sinArchivo ? 3 : 7) * MS_DIA) {
-    const dias = Math.floor((Date.now() - base) / MS_DIA);
-    h += '<div class="nota"><div class="cuerpo"><b>' + (ui.ultimoRespaldo ? "Van " + dias + " días sin respaldo" : "Aún no hay respaldo fuera del navegador") +
-      '</b><span class="pequeno">' + (sinArchivo && compartible ? "Toca «Guardar respaldo» y elige «Guardar en Archivos» o iCloud Drive. Si algo le pasa a la app, de ahí recuperas todo." : "Solo cuentan las escrituras al archivo conectado y las exportaciones.") + '</span><div class="acciones">' +
-      (sinArchivo && compartible ? '<button class="btn prim" data-a="compartir">Guardar respaldo</button>' : '<button class="btn prim" data-a="exportar">Exportar respaldo</button>') +
-      (P.hayApiArchivos() && !P.archivo() ? '<button class="btn" data-a="archivoNuevo">Conectar archivo</button>' : "") + "</div></div></div>";
-  }
-  if (ui.persistente === false && !ui.ocultarPersist && !P.archivo() && !P.pendiente() && !P.hayApiArchivos()) {
-    h += '<div class="nota suave"><div class="cuerpo"><b>Chrome no garantizó guardar los datos</b><span class="pequeno">No concedió el almacenamiento persistente. Exporta respaldos seguido.</span></div><button class="icono" data-a="ocultarPersist" aria-label="Ocultar">' + ic("x", 18) + "</button></div>";
+  if (DEMO) return h;   // demos: sin avisos de respaldo ni de instalar
+  /* Respaldo manual, igual en Android e iPhone: aviso a los 3 días sin respaldo (solo cuentan los
+     compartidos y descargas que salieron bien). */
+  if (P.respaldoVencido()) {
+    const dias = P.diasSinRespaldo();
+    h += '<div class="nota" role="status"><div class="cuerpo"><b>' + (P.ultimoRespaldo() ? "Van " + dias + " días sin respaldo" : "Aún no guardas un respaldo") +
+      '</b><span class="pequeno">Toca «Guardar respaldo» y elige ' + esc(DESTINOS_RESPALDO()) + '. Si algo le pasa al teléfono o a la app, de ahí recuperas todo.</span>' +
+      '<div class="acciones"><button class="btn prim" data-a="guardarRespaldo">Guardar respaldo</button></div></div></div>';
   }
   return h;
 }
@@ -2784,21 +2591,14 @@ function vAjustes() {
   const pf = estado.perfil || {};
   h += '<section class="tarjeta col"><h2>Perfil</h2><label class="campo">Nombre<input class="entrada" id="perfil-nombre" maxlength="40" autocapitalize="words" value="' + esc(pf.nombre || "") + '"></label><button class="btn ancho" data-a="guardarNombre">Guardar nombre</button>' +
     '<div class="campo"><span>Figura del mapa muscular</span><div class="fila" style="gap:8px"><button class="chip" data-a="figura" data-f="hombre" aria-pressed="' + (pf.figura === "hombre") + '">Hombre</button><button class="chip" data-a="figura" data-f="mujer" aria-pressed="' + (pf.figura === "mujer") + '">Mujer</button></div></div>' +
-    '<span class="mini tenue">Se usa en el saludo y en el nombre sugerido del archivo (' + esc(L.nombreArchivo(estado, false)) + ').' + (pf.peso_inicial ? " Peso inicial: " + L.kg(pf.peso_inicial) + " kg" + (pf.fecha_inicio ? " (" + L.fechaCorta(pf.fecha_inicio) + ")" : "") + "; se corrige en Peso." : "") + "</span></section>";
+    '<span class="mini tenue">Se usa en el saludo y en el nombre sugerido del respaldo (' + esc(L.nombreArchivo(estado, false)) + ').' + (pf.peso_inicial ? " Peso inicial: " + L.kg(pf.peso_inicial) + " kg" + (pf.fecha_inicio ? " (" + L.fechaCorta(pf.fecha_inicio) + ")" : "") + "; se corrige en Peso." : "") + "</span></section>";
   h += '<section class="tarjeta col"><h2>Guardado</h2>';
-  h += '<span class="pequeno">Estado: <b>' + esc(g.texto) + "</b>. Todo se guarda al instante en este teléfono (IndexedDB)" + (P.archivo() ? " y en el archivo <b>" + esc(P.archivo().name) + "</b>." : ".") + "</span>";
-  const errA = P.errorArchivoDetalle();
-  if (errA) h += '<span class="pequeno" style="color:var(--danger,#c0392b)">Último error del archivo (' + esc(errA.cuando) + "): falló al <b>" + esc(errA.paso) + "</b> · " + esc(errA.detalle) + "</span>";
-  if (P.hayApiArchivos()) {
-    if (P.archivo()) h += '<div class="par"><button class="btn" data-a="probarArchivo">Probar el archivo</button><button class="btn" data-a="desvincular">Desconectar</button></div>';
-    else if (P.pendiente()) h += '<button class="btn prim ancho" data-a="reconectar">Reconectar ' + esc(P.pendiente().name || "archivo") + '</button><button class="btn ancho" data-a="desvincular">Olvidar este archivo</button>';
-    else h += '<span class="pequeno tenue">Conecta un archivo .json: cada cambio se escribe ahí. Es el respaldo de verdad, porque el navegador puede borrar sus datos.</span><div class="par"><button class="btn prim" data-a="archivoNuevo">Crear archivo</button><button class="btn" data-a="vincular">Abrir existente</button></div>';
-  } else h += '<span class="pequeno tenue">' + (PWA.ios ? "En iPhone ningún navegador puede escribir solo en un archivo: el respaldo lo guardas tú. Toca «" + BOTON_RESPALDO() + "» y guárdalo en Archivos o iCloud Drive." : "Este navegador no permite conectar archivos: usa Exportar para guardar respaldos.") + "</span>";
-  h += '<div class="par"><button class="btn" data-a="exportar">Exportar respaldo</button><label class="btn">Importar<input type="file" accept=".json,application/json" class="oculto" data-c="importar"></label></div>';
-  if (typeof navigator !== "undefined" && navigator.share) h += PWA.ios && !P.hayApiArchivos() ? '<button class="btn prim ancho" data-a="compartir">Guardar respaldo en Archivos o iCloud…</button>' : '<button class="btn ancho" data-a="compartir">Compartir respaldo…</button>';
+  h += '<span class="pequeno">Estado: <b>' + esc(g.texto) + "</b>. Todo se guarda al instante en este teléfono. El respaldo lo guardas tú: «Guardar respaldo» abre el menú de compartir (" + esc(ES_IOS ? "Guardar en Archivos, iCloud Drive…" : "Drive, Archivos…") + ") o lo descarga.</span>";
+  h += '<button class="btn prim ancho" data-a="guardarRespaldo">Guardar respaldo</button>';
+  h += '<div class="par"><button class="btn" data-a="exportar">Descargar .json</button><label class="btn">Restaurar respaldo<input type="file" accept=".json,application/json" class="oculto" data-c="importar"></label></div>';
+  h += '<span class="mini tenue">Último respaldo: ' + (P.ultimoRespaldo() ? esc(new Date(P.ultimoRespaldo()).toLocaleString("es")) : "nunca") + ". Incluye las fotos. «Restaurar respaldo» acepta tus respaldos y el archivo .json que usabas antes.</span>";
+  h += '<span class="mini tenue">Almacenamiento persistente: ' + (ui.persistente === true ? "concedido (el navegador no borra los datos por falta de espacio)" : ui.persistente === false ? "no concedido: el navegador podría borrar los datos si falta espacio. Guarda respaldos seguido" + (PWA.servida && !PWA.instalada ? " e instala la app" : "") : "no disponible en este navegador") + ".</span>";
   h += '<button class="btn ancho" data-a="diagnostico">Diagnóstico del guardado</button>';
-  h += '<span class="mini tenue">Último respaldo fuera del navegador: ' + (ui.ultimoRespaldo ? esc(new Date(ui.ultimoRespaldo).toLocaleString("es")) : "nunca") + ". La exportación incluye las fotos.</span>";
-  h += '<span class="mini tenue">Almacenamiento persistente: ' + (ui.persistente === true ? "concedido" : ui.persistente === false ? "no concedido (Chrome puede borrar los datos si falta espacio)" : "no disponible en este navegador") + ".</span>";
   h += '<div id="respaldos" class="col"><span class="mini tenue">Cargando respaldos internos…</span></div></section>';
   if (PWA.servida) {
     h += '<section class="tarjeta col"><h2>App</h2><span class="pequeno">' + (PWA.instalada ? "Instalada en este teléfono." : "Abierta en el navegador, sin instalar.") + " Versión " + esc(VERSION_APP) + ".</span>";
@@ -2806,7 +2606,10 @@ function vAjustes() {
     if (!PWA.instalada && PWA.aviso) h += '<button class="btn prim ancho" data-a="pwaInstalar">Instalar Rutina</button>';
     else if (!PWA.instalada) h += '<span class="mini tenue">' + (PWA.ios ? "Para instalarla: botón Compartir (cuadro con flecha) → «Agregar a pantalla de inicio»." : "Para instalarla: menú ⋮ de Chrome → «Instalar app» o «Agregar a la pantalla principal».") + "</span>";
     if (PWA.ios) h += '<span class="mini tenue"><b>Ojo:</b> en iPhone, si quitas el ícono de Rutina se borran sus datos. Guarda respaldos en Archivos o iCloud.</span>';
+    else h += '<span class="mini tenue"><b>Ojo:</b> si desinstalas la app o borras los datos del sitio en Chrome, se borran tus registros. Con un respaldo los recuperas.</span>';
     h += '<span class="mini tenue">Instalada, abre sin internet y el navegador cuida mejor sus datos. Actualizar no toca tus registros.</span></section>';
+  } else if (!DEMO) {
+    h += '<section class="tarjeta col"><h2>App</h2>' + notaSuelto() + "</section>";
   }
   h += '<section class="tarjeta col" style="gap:12px"><h2>Constancia y progresión</h2><div class="campo"><span>Días habituales</span><div class="chips dias">' + L.DIAS_CORTOS.map((d, i) => '<button class="chip" data-a="diaHab" data-d="' + (i + 1) + '" aria-pressed="' + (aj.dias_habituales.indexOf(i + 1) >= 0) + '" aria-label="' + L.NOMBRES_DIA[i] + '">' + d + "</button>").join("") + "</div></div>" +
     ajusteNum("aviso_dias", "Aviso desde", aj.aviso_dias + " días habituales sin ir", "Sale en Inicio.") +
@@ -2824,7 +2627,7 @@ function vAjustes() {
   h += '<section class="tarjeta col"><h2>Lista base</h2><span class="pequeno tenue">Agrega los ejercicios base que falten (por nombre), sin tocar los tuyos.</span><button class="btn ancho" data-a="sembrar">Cargar los que falten</button></section>';
   h += '<section class="tarjeta col" style="gap:6px"><h2>Créditos</h2><span class="pequeno">Ilustraciones y datos de ejercicios: Exercise data by <a href="https://repdb.co" target="_blank" rel="noopener nofollow">RepDB (repdb.co)</a>.</span>' +
     '<span class="pequeno">Figuras del mapa muscular: <a href="https://github.com/HichamELBSI/react-native-body-highlighter" target="_blank" rel="noopener">react-native-body-highlighter</a> · MIT · © 2022 ELABBASSI Hicham.</span></section>';
-  h += '<section class="col mini tenue" style="text-align:center;gap:2px"><span>Rutina · esquema v' + L.VERSION_ESQUEMA + " · funciona sin internet</span><span>Los datos no salen del teléfono salvo que exportes o conectes un archivo.</span></section></main>";
+  h += '<section class="col mini tenue" style="text-align:center;gap:2px"><span>Rutina · esquema v' + L.VERSION_ESQUEMA + " · funciona sin internet</span><span>Los datos no salen del teléfono salvo que guardes un respaldo.</span></section></main>";
   return h;
 }
 function ajusteNum(k, etiqueta, valor, ayuda) {
@@ -2836,16 +2639,17 @@ async function pintarRespaldos() {
   const lista = await P.respaldos();
   if (!$("#respaldos")) return;
   $("#respaldos").innerHTML = '<span class="pequeno" style="font-weight:600">Versiones anteriores en este teléfono</span>' + (lista.length ? '<div class="lista">' + lista.map((r) => '<div class="it"><span class="txt"><b>' + esc(new Date(r.ts).toLocaleString("es")) + "</b><span>" + esc(r.resumen) +
-    '</span></span><button class="btn" data-a="restaurarRespaldo" data-i="' + r.i + '">Restaurar</button></div>').join("") + "</div>" : '<span class="mini tenue">Aún no hay. Se guarda la versión anterior antes de escribir, como mucho una cada 3 minutos, y se conservan 3.</span>');
+    '</span></span><button class="btn" data-a="restaurarRespaldo" data-i="' + r.i + '">Restaurar</button></div>').join("") + "</div>" : '<span class="mini tenue">Aún no hay. Se guarda la versión anterior antes de escribir, como mucho una cada 3 minutos, y se conservan 3.</span>') +
+    '<span class="mini tenue">Están dentro de la app: no reemplazan a «Guardar respaldo».</span>';
 }
 
 /* ── Rescate (copia ilegible) ── */
 function vRescate() {
   const il = P.ilegible();
   return '<main class="vista"><h1 style="margin:0;font-size:26px">No se pudo leer lo guardado</h1><div class="nota peligro"><div class="cuerpo"><b>El autoguardado está en pausa</b><span>' + esc(il ? il.motivo : "") +
-    " No se escribió nada encima.</span></div></div><span>1. Descarga el texto crudo para no perderlo. 2. Luego importa un respaldo o empieza de cero.</span>" +
-    '<button class="btn prim ancho" data-a="rescatar">Descargar el texto crudo</button><label class="btn ancho">Importar un respaldo (.json)<input type="file" accept=".json,application/json" class="oculto" data-c="importar"></label>' +
-    (P.hayApiArchivos() ? '<button class="btn ancho" data-a="vincular">Abrir mi archivo .json</button>' : "") + '<button class="btn peligro ancho" data-a="deCero">Empezar de cero</button></main>';
+    " No se escribió nada encima.</span></div></div><span>1. Descarga el texto crudo para no perderlo. 2. Luego restaura un respaldo (o tu archivo .json) o empieza de cero.</span>" +
+    '<button class="btn prim ancho" data-a="rescatar">Descargar el texto crudo</button><label class="btn ancho">Restaurar un respaldo (.json)<input type="file" accept=".json,application/json" class="oculto" data-c="importar"></label>' +
+    '<button class="btn peligro ancho" data-a="deCero">Empezar de cero</button></main>';
 }
 
 /* ═══ ACCIONES ═══ */
@@ -2871,36 +2675,14 @@ const A = {
   deshacerToast() { const f = toast.deshacer; toast.deshacer = null; const t = $("#toast"); if (t) t.classList.add("oculto"); if (f) f(); },
   pildora(el) {
     const a = el.dataset.accion;
-    if (a === "reconectar") A.reconectar();
-    else if (a === "turno") location.reload();
+    if (a === "turno") location.reload();
     else ir("ajustes");
-  },
-  ocultarPersist() { ui.ocultarPersist = true; render(); },
-  async reconectar() {
-    const r = await P.reconectar(false);
-    if (r.ok) toast(r.cargado ? "Archivo reconectado: se cargaron sus datos" : "Archivo reconectado y al día");
-    else if (r.motivo === "sin-permiso") toast("Chrome no dio permiso para escribir el archivo");
-    render();
-  },
-  async archivoNuevo() { const r = await P.archivoNuevo(); if (r.ok) toast(r.cargado ? "Se cargaron los datos del archivo" : "Archivo conectado: se guarda solo"); else if (r.motivo === "sin-api") aviso("No disponible", "Este navegador no permite conectar archivos. Usa Exportar respaldo."); render(); },
-  async vincular() {
-    const r = await P.vincular();
-    if (r.ok) { toast(r.cargado ? "Se cargaron los datos del archivo" : "Archivo conectado: se guarda solo"); if (P.ilegible() == null && ui.vista === "rescate") ir("inicio", {}, true); }
-    else if (r.motivo === "sin-api") aviso("No disponible", "Este navegador no permite conectar archivos. Usa Exportar respaldo.");
-    render();
-  },
-  async desvincular() { if (await confirmar("Desconectar archivo", "El archivo no se borra; solo deja de actualizarse. Lo de este teléfono sigue igual.", "Desconectar")) { await P.desvincular(); render(); } },
-  async probarArchivo() {
-    const r = await P.probarArchivo();
-    if (r.ok) toast("Archivo escrito y comprobado");
-    else if (r.motivo === "pendiente") toast("Primero toca Reconectar");
-    else if (r.motivo === "sin-archivo") toast("No hay archivo conectado");
-    render();
   },
   async diagnostico() {
     const d = await P.diagnostico();
     d.version = VERSION_APP;
-    d.pwa = { servida: PWA.servida, instalada: PWA.instalada, serviceWorker: PWA.sw, versionNueva: !!PWA.nueva, puedeInstalar: !!PWA.aviso };
+    d.instalada = PWA.instalada;
+    d.pwa = { servida: PWA.servida, instalada: PWA.instalada, ios: PWA.ios, serviceWorker: PWA.sw, versionNueva: !!PWA.nueva, puedeInstalar: !!PWA.aviso };
     const texto = JSON.stringify(d, null, 2);
     let copiado = false;
     try { await navigator.clipboard.writeText(texto); copiado = true; } catch (e) { /* se copia a mano */ }
@@ -2909,7 +2691,15 @@ const A = {
       '<textarea class="entrada" readonly style="width:100%;min-height:240px;margin-top:10px;font:12px/1.4 ui-monospace,monospace">' + esc(texto) + "</textarea>");
   },
   async exportar() { await P.guardarAhora(); const r = await P.exportar(false); if (r.ok) toast("Respaldo descargado"); render(); },
-  async compartir() { await P.guardarAhora(); const r = await P.exportar(true); if (r.ok) toast(r.via === "compartir" ? "Respaldo compartido" : "Respaldo descargado"); render(); },
+  /* Botón principal, igual en Android e iPhone: menú Compartir si acepta archivos; si no, descarga.
+     Cerrar el menú no es error y no cuenta como respaldo. */
+  async guardarRespaldo() {
+    await P.guardarAhora();
+    const r = await P.exportar(true);
+    if (r.ok) toast(r.via === "compartir" ? "Respaldo guardado" : "Respaldo descargado");
+    else if (r.motivo === "cancelado") toast("No se guardó el respaldo");
+    render();
+  },
   async restaurarRespaldo(el) {
     if (!await confirmar("Restaurar versión anterior", "Lo de ahora pasa también a los respaldos, así que se puede volver.", "Restaurar")) return;
     const r = await P.restaurarRespaldo(+el.dataset.i);
@@ -3215,9 +3005,9 @@ const A = {
     cambiar((d) => { d.papelera = []; });
   }
 };
-/* ── Bienvenida: nombre → peso inicial → dónde guardar ── */
+/* ── Bienvenida: nombre → peso inicial → el respaldo lo guardas tú ── */
 function vBienvenida() {
-  const paso = ui.paso || 1, pf = estado.perfil, api = P.hayApiArchivos();
+  const paso = ui.paso || 1, pf = estado.perfil;
   const puntos = '<div class="fila" style="gap:6px;justify-content:center" aria-label="Paso ' + paso + ' de 3">' + [1, 2, 3].map((n) => '<span style="width:28px;height:4px;border-radius:2px;background:' + (n <= paso ? "var(--accent)" : "var(--line)") + '"></span>').join("") + "</div>";
   const grande = 'style="height:60px;font-size:22px;border-radius:14px"';
   let h = '<main class="vista" style="padding-top:28px;gap:18px">' + puntos;
@@ -3226,22 +3016,18 @@ function vBienvenida() {
       '<label class="campo" style="font-size:15px">¿Cómo te llamas?<input class="entrada" ' + grande + ' id="bv-nombre" maxlength="40" autocapitalize="words" autocomplete="given-name" enterkeyhint="next" data-enter="bvNombre" data-enfocar value="' + esc(pf.nombre) + '"></label>' +
       '<div class="campo" style="font-size:15px"><span>Figura para tu mapa muscular <span class="tenue">(opcional)</span></span><div class="fila" style="gap:8px"><button class="chip" data-a="figura" data-f="hombre" aria-pressed="' + (pf.figura === "hombre") + '">Hombre</button><button class="chip" data-a="figura" data-f="mujer" aria-pressed="' + (pf.figura === "mujer") + '">Mujer</button></div></div>' +
       '<p class="error" id="bv-error" role="alert"></p><button class="btn prim grande" data-a="bvNombre">Siguiente</button>' +
-      '<div class="col" style="gap:8px;margin-top:8px;padding-top:14px;border-top:1px solid var(--line)"><span class="pequeno tenue">¿Ya usabas Rutina en otro teléfono o abierta desde Archivos? Trae tus datos:</span>' +
-      (api ? '<button class="btn ancho" data-a="bvAbrir">' + ic("archivo", 18) + " Abrir mi archivo .json</button>" : "") +
-      '<label class="btn ancho">Importar un respaldo<input type="file" accept=".json,application/json" class="oculto" data-c="importar"></label></div>';
+      '<div class="col" style="gap:8px;margin-top:8px;padding-top:14px;border-top:1px solid var(--line)"><span class="pequeno tenue">¿Ya usabas Rutina en otro teléfono o abierta desde Archivos? Trae tus datos con tu respaldo o tu archivo .json:</span>' +
+      '<label class="btn ancho">' + ic("archivo", 18) + ' Restaurar un respaldo<input type="file" accept=".json,application/json" class="oculto" data-c="importar"></label></div>';
   } else if (paso === 2) {
     h += '<div class="col" style="gap:4px"><h1 style="margin:0;font-size:28px">' + (pf.nombre ? "Hola, " + esc(pf.nombre.split(" ")[0]) + "." : "Hola.") + '</h1><span class="tenue">¿Cuánto pesas hoy? Será tu punto de partida en Peso.</span></div>' +
       '<label class="campo" style="font-size:15px">Peso inicial (kg)<input class="entrada num" ' + grande + ' id="bv-peso" inputmode="decimal" enterkeyhint="next" placeholder="Ej. 78,5" data-enter="bvPeso" data-enfocar value="' + (pf.peso_inicial ? esc(L.kg(pf.peso_inicial)) : "") + '"></label>' +
       '<p class="error" id="bv-error" role="alert"></p><button class="btn prim grande" data-a="bvPeso">Siguiente</button><button class="btn texto ancho" data-a="bvPaso" data-p="3">Omitir por ahora</button><button class="btn texto ancho" data-a="bvPaso" data-p="1">Atrás</button>';
   } else {
-    h += '<div class="col" style="gap:4px"><h1 style="margin:0;font-size:28px">¿Dónde guardas tus datos?</h1><span class="tenue">Todo se guarda al instante en este teléfono, pero el navegador no garantiza conservarlo. ' + (api ? "Un archivo .json es tu respaldo de verdad." : "Un respaldo guardado fuera de la app es tu seguro.") + "</span></div>";
-    if (api) h += '<button class="opcion prim" data-a="bvCrear"><span class="txt"><b style="font-size:17px">Crear un archivo nuevo</b><small>' + esc(L.nombreArchivo(estado, false)) + ' · se actualiza solo</small></span>' + ic("der") + "</button>" +
-      '<button class="opcion" data-a="bvAbrir"><span class="txt"><b>Abrir uno que ya tengo</b><small class="tenue">Si tiene datos, se cargan</small></span></button>' +
-      '<span class="mini tenue">Al reabrir la app, Chrome pide un toque en «Reconectar» para volver a escribir en el archivo.</span>';
-    else if (PWA.ios) h += '<div class="nota suave"><div class="cuerpo"><b>En iPhone, el respaldo lo guardas tú</b><span class="pequeno">Ningún navegador del iPhone puede escribir solo en un archivo. De vez en cuando toca Ajustes → «' + BOTON_RESPALDO() + '» y guárdalo en Archivos (o iCloud Drive). Rutina te lo recordará.</span></div></div>' +
-      '<div class="nota"><div class="cuerpo"><b>No quites el ícono de Rutina</b><span class="pequeno">En iPhone, quitarlo borra sus datos. Con un respaldo en Archivos o iCloud los recuperas con «Importar».</span></div></div>';
-    else h += '<div class="nota suave"><div class="cuerpo"><b>Este navegador no permite conectar archivos</b><span class="pequeno">Usa «Exportar respaldo» en Ajustes de vez en cuando.</span></div></div>';
-    h += '<button class="btn ' + (api ? "" : "prim ") + 'ancho" style="height:52px" data-a="bvFin">' + (api ? "Por ahora, solo en este teléfono" : "Empezar") + '</button><button class="btn texto ancho" data-a="bvPaso" data-p="2">Atrás</button>';
+    h += '<div class="col" style="gap:4px"><h1 style="margin:0;font-size:28px">El respaldo lo guardas tú</h1><span class="tenue">Todo se guarda al instante en este teléfono, sin internet. Para no perderlo si cambias de teléfono o se borran los datos, guarda un respaldo de vez en cuando.</span></div>' +
+      '<div class="nota suave"><div class="cuerpo"><b>Ajustes → «Guardar respaldo»</b><span class="pequeno">Se abre el menú de compartir: elige ' + esc(DESTINOS_RESPALDO()) + '. Rutina te lo recuerda a los 3 días. Para volver a cargarlo: «Restaurar respaldo».</span></div></div>' +
+      (PWA.ios ? '<div class="nota"><div class="cuerpo"><b>No quites el ícono de Rutina</b><span class="pequeno">En iPhone, quitarlo borra sus datos. Con un respaldo en Archivos o iCloud los recuperas con «Restaurar respaldo».</span></div></div>'
+        : '<div class="nota"><div class="cuerpo"><b>Ojo al desinstalar</b><span class="pequeno">Si desinstalas la app o borras los datos del sitio en Chrome, se borran tus registros. Con un respaldo los recuperas.</span></div></div>');
+    h += '<button class="btn prim ancho" style="height:52px" data-a="bvFin">Empezar</button><button class="btn texto ancho" data-a="bvPaso" data-p="2">Atrás</button>';
   }
   return h + "</main>";
 }
@@ -3264,14 +3050,6 @@ Object.assign(A, {
     ui.paso = 3; render(true);
   },
   bvPaso(el) { ui.paso = +el.dataset.p; render(true); },
-  async bvCrear() { const r = await P.archivoNuevo(); if (r.ok) { toast(r.cargado ? "Se cargaron los datos del archivo" : "Archivo conectado: se guarda solo"); terminarBienvenida(); } else render(); },
-  async bvAbrir() {
-    const r = await P.vincular();
-    if (!r.ok) { render(); return; }
-    if (r.cargado) { toast("Se cargaron los datos del archivo"); terminarBienvenida(); return; }
-    toast("Archivo conectado");
-    if (ui.paso === 3 || (estado.perfil.nombre && estado.perfil.peso_inicial)) terminarBienvenida(); else render(true);
-  },
   bvFin() { terminarBienvenida(); },
   guardarNombre() {
     const n = (($("#perfil-nombre") || {}).value || "").trim().slice(0, 40);
@@ -3321,7 +3099,7 @@ const CAMBIOS = {
     const f = el.files && el.files[0]; el.value = "";
     if (!f) return;
     const r = await P.importar(f);
-    if (r.ok) { if (estado && estado.perfil) cambiar((d) => { d.perfil.bienvenida_hecha = true; }, true); capas.filter((c) => !c.resolver).forEach((c) => cerrarCapa(c.id)); Object.keys(urlsFoto).forEach(olvidarUrlFoto); toast("Respaldo importado" + (r.fotos ? " con " + r.fotos + " fotos" : "")); ir("inicio", {}, true); }
+    if (r.ok) { if (estado && estado.perfil) cambiar((d) => { d.perfil.bienvenida_hecha = true; }, true); capas.filter((c) => !c.resolver).forEach((c) => cerrarCapa(c.id)); Object.keys(urlsFoto).forEach(olvidarUrlFoto); toast("Respaldo restaurado" + (r.fotos ? " con " + r.fotos + " fotos" : "")); ir("inicio", {}, true); }
   },
   ejGrafico(el) { ui.ejGrafico = el.value; render(); },
   async fotoFicha(el) {
@@ -3388,13 +3166,14 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "cceeedbcde"; /*VERSION-APP*/
-/* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin archivo
-   conectado (no existe la API), sin botón propio de instalar y, si se quita el ícono, se borran los
-   datos. iPadOS se presenta como Mac: se reconoce por la pantalla táctil. */
+const VERSION_APP = "e425b0d6ce"; /*VERSION-APP*/
+/* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin botón propio de
+   instalar y, si se quita el ícono, se borran los datos. iPadOS se presenta como Mac: se reconoce por
+   la pantalla táctil. El guardado y el respaldo son iguales que en Android. */
 const ES_IOS = (() => { try { return /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1); } catch (e) { return false; } })();
-/* Nombre del botón de respaldo que de verdad se ve: «Guardar respaldo» (menú Compartir) o «Exportar respaldo». */
-const BOTON_RESPALDO = () => (typeof navigator !== "undefined" && navigator.share ? "Guardar respaldo" : "Exportar respaldo");
+/* Dónde guardar el respaldo según el sistema (texto de ayuda; el menú lo pone el teléfono). */
+const DESTINOS_RESPALDO = () => (ES_IOS ? "«Guardar en Archivos» o iCloud Drive" : "Drive o Archivos (o donde prefieras)");
+const URL_INSTALAR = "https://marcespal.github.io/rutina-app/";
 const PWA = {
   servida: /^https?:$/.test(location.protocol) && !DEMO, ios: ES_IOS,
   instalada: false, aviso: null, nueva: null, sw: "sin registrar", recargando: false
@@ -3405,8 +3184,16 @@ function verInstalada() {
   try { PWA.instalada = matchMedia("(display-mode: standalone)").matches || matchMedia("(display-mode: minimal-ui)").matches || navigator.standalone === true; }
   catch (e) { PWA.instalada = false; }
 }
+/* Abierta como archivo suelto (desde Archivos: content://, file://): funciona, pero sus datos viven en
+   un origen compartido por todos los HTML abiertos así y el navegador no los protege. Aviso fijo. */
+function notaSuelto() {
+  return '<div class="nota peligro" role="note"><div class="cuerpo"><b>Instala Rutina desde el enlace para que tus datos estén protegidos</b>' +
+    '<span class="pequeno">Abierta como archivo, el navegador puede borrar lo que anotes. Abre <a href="' + URL_INSTALAR + '" target="_blank" rel="noopener">' + esc(URL_INSTALAR.replace(/^https:\/\//, "").replace(/\/$/, "")) + "</a> e instálala. " +
+    "¿Ya anotaste aquí? Toca «Guardar respaldo» y luego, en la app instalada, «Restaurar respaldo».</span>" +
+    '<div class="acciones"><a class="btn prim" href="' + URL_INSTALAR + '" target="_blank" rel="noopener">Abrir el enlace</a><button class="btn" data-a="guardarRespaldo">Guardar respaldo</button></div></div></div>';
+}
 function avisosPwa() {
-  if (!PWA.servida) return "";
+  if (!PWA.servida) return DEMO ? "" : notaSuelto();
   let h = "";
   if (PWA.nueva) h += '<div class="nota suave"><div class="cuerpo"><b>Hay una versión nueva de Rutina</b><span class="pequeno">Actualizar no toca tus registros.</span><div class="acciones"><button class="btn prim" data-a="pwaActualizar">Actualizar</button></div></div></div>';
   if (!PWA.instalada && PWA.ios && !ui.ocultarInstalar) h += '<div class="nota suave"><div class="cuerpo"><b>Instala Rutina en tu iPhone</b><span class="pequeno">Toca <b>Compartir</b> (el cuadro con la flecha hacia arriba) y luego «Agregar a pantalla de inicio». Instalada abre sin internet y el iPhone no borra sus datos por dejar de usarla. Instálala antes de empezar: lo que anotes en el navegador no pasa a la app instalada.</span></div><button class="icono" data-a="ocultarInstalar" aria-label="Ocultar">' + ic("x", 18) + "</button></div>";
@@ -3484,18 +3271,26 @@ async function arrancar(robar) {
   if (r.estado === "otra-pestana") { bloqueo(); return; }
   if (r.recuperado) setTimeout(() => toast("Se recuperó lo último que anotaste antes de cerrar"), 400);
   if (r.estado === "sin-almacenamiento") estado = L.documentoNuevo();
-  else if (r.estado === "nuevo") { if (!estado) { estado = L.documentoNuevo(); await P.guardarLocal(); } }   // si el archivo recordado ya cargó datos, no se pisan
+  else if (r.estado === "nuevo") { if (!estado) { estado = L.documentoNuevo(); await P.guardarLocal(); } }
   else if (r.estado === "ilegible") { estado = null; ui.vista = "rescate"; }
-  /* Bienvenida solo con un estado leído BIEN y vacío, sin archivo conectado ni recordado:
-     nunca por una lectura fallida (ilegible va a Rescate). */
-  const darBienvenida = !!estado && r.estado !== "sin-almacenamiento" && !estado.perfil.bienvenida_hecha && L.estaVacio(estado) && !P.archivo() && !P.pendiente();
-  ui.ultimoRespaldo = await P.ultimoRespaldoExterno();
-  ui.ultimoPendiente = !!(P.pendiente() && !P.archivo());
+  /* Bienvenida solo con un estado leído BIEN y vacío: nunca por una lectura fallida (ilegible va a Rescate). */
+  const darBienvenida = !!estado && r.estado !== "sin-almacenamiento" && !estado.perfil.bienvenida_hecha && L.estaVacio(estado);
   const enCurso = estado && L.sesionEnCurso(estado);
   try { history.replaceState({ vista: "inicio", params: {} }, ""); } catch (e) {}
   if (darBienvenida) { ui.paso = 1; ir("bienvenida", {}, true); }
   else if (enCurso && ui.vista !== "rescate") ir("sesion", { id: enCurso.id }); else render(true);
+  avisoMigracion();
   await pedirPersistencia();
+}
+/* Una sola vez para quien tenía un .json conectado (versiones hasta 2026-11-22): el vínculo ya se
+   olvidó al arrancar; los datos siguen aquí. Se marca como visto al responder. */
+async function avisoMigracion() {
+  if (DEMO || !P.avisoMigracionPendiente()) return;
+  const r = await preguntar("Cambió cómo se guarda tu respaldo",
+    "Ya no se guarda automáticamente en tu archivo .json. <b>Tus datos siguen aquí.</b> Guarda respaldos con «Guardar respaldo»; tu archivo .json sirve para restaurar.",
+    [{ valor: "guardar", texto: "Guardar respaldo ahora", tono: "prim" }, { valor: "ok", texto: "Entendido" }]);
+  await P.marcarMigracionAvisada();
+  if (r === "guardar") A.guardarRespaldo();
 }
 /* Repintar Ajustes trae los respaldos internos (asíncrono). */
 const renderBase = render;
