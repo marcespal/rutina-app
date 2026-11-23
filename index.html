@@ -222,6 +222,22 @@ select.entrada{appearance:auto}
 .comp-lista li.omitido{opacity:.6}
 .comp-chk{display:flex;gap:10px;align-items:flex-start;margin-top:10px;font-size:14px;min-height:44px}
 .comp-chk input{width:22px;height:22px;flex:0 0 auto;margin-top:1px}
+/* balance muscular, logros, «Tu mes» y programas */
+.consejo{display:flex;gap:10px;align-items:flex-start;font-size:15px;line-height:1.35}
+.consejo .ico{font-size:22px;line-height:1.1;flex:0 0 auto;width:28px;text-align:center}
+.consejo b{font-weight:600}
+button.tarjeta{text-align:left;width:100%;color:var(--ink);font:inherit}
+.celebra{background:var(--warn-bg);color:var(--warn-ink);border-color:transparent;animation:celebra .5s ease-out}
+@keyframes celebra{from{transform:scale(.94);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion: reduce){.celebra{animation:none}}
+.lista>.it.logro{min-height:60px;align-items:center}
+.it.logro .emoji{font-size:26px;width:34px;text-align:center;flex:0 0 auto}
+.it.logro.pend .emoji{filter:grayscale(1);opacity:.6}
+.lista .it .txt .barra-logro{display:block;height:6px;border-radius:3px;background:var(--track);overflow:hidden;margin:5px 0 1px}
+.barra-logro i{display:block;height:100%;background:var(--accent);border-radius:3px}
+.nota .emoji{font-size:24px;line-height:1.1}
+.prog-rut{margin:12px 0 0;font-size:15px}
+.prog-rut:first-child{margin-top:4px}
 .paso{display:flex;align-items:center;gap:4px;padding:3px;border-radius:12px;background:var(--track)}
 .paso button{flex:0 0 44px;width:44px;height:44px;border:0;border-radius:10px;background:var(--surface);box-shadow:var(--sombra);font-size:20px;font-weight:600;padding:0}
 .paso span{flex:1 1 auto;text-align:center;font-weight:700;font-size:18px}
@@ -614,6 +630,7 @@ function migrar(d) {
     id: String(p.id || nuevoId()), fecha: typeof p.fecha === "string" ? p.fecha : "", kg: numO(p.kg, null), nota: p.nota ? String(p.nota) : ""
   }));
   o.papelera = arr(o.papelera).filter((x) => x && typeof x === "object");
+  if (o.vistos != null) o.vistos = sanearVistos(o.vistos);   // solo si existe: los documentos viejos quedan idénticos
   return o;
 }
 function sanearSesion(s) {
@@ -1252,7 +1269,8 @@ function recapDelAnio(estado, anio, hoy) {
     intro: tarde ? "En tus " + semanasConApp + (semanasConApp === 1 ? " semana" : " semanas") + " con Rutina…" : "Tu año en el gym",
     sesiones: sesiones.length, horas: horas, mejorRacha: mejorRacha, pctSemanas2: pctSemanas2, diaFavorito: diaFavorito, franja: franja,
     kilos: kilos, equivalencia: equivalencia(kilos), series: seriesTotal, repeticiones: repsTotal, ejerciciosDistintos: distintos,
-    top: top, mejorado: mejorado, records: records, mapa: mapa, peso: peso, arquetipo: arquetipo
+    top: top, mejorado: mejorado, records: records, mapa: mapa, peso: peso, arquetipo: arquetipo,
+    logros: logrosDelPeriodo(estado, desde, hasta).length          // logros ganados en el año (solo se muestra la cifra)
   });
 }
 
@@ -1382,12 +1400,14 @@ function validarCarga(o) {
   }
   return { ok: true, datos: { nombre: cortarNombre(o.n), ejercicios: ejercicios } };
 }
-/** «Empuje» → «Empuje (compartida)», «Empuje (compartida 2)»… si ya existe. Nunca reemplaza una rutina. */
-function nombreRutinaLibre(estado, nombre) {
+/** «Empuje» → «Empuje (compartida)», «Empuje (compartida 2)»… si ya existe. Nunca reemplaza una rutina.
+    etiqueta: «compartida» (por omisión) o «programa» (Programas listos). */
+function nombreRutinaLibre(estado, nombre, etiqueta) {
+  const et = etiqueta === "programa" ? "programa" : "compartida";
   const usados = new Set(arr(estado && estado.rutinas).map((r) => String(r.nombre || "").trim().toLowerCase()));
   if (!usados.has(nombre.toLowerCase())) return nombre;
   for (let i = 1; i < 1000; i++) {
-    const suf = i === 1 ? " (compartida)" : " (compartida " + i + ")";
+    const suf = i === 1 ? " (" + et + ")" : " (" + et + " " + i + ")";
     const t = nombre.slice(0, COMP_MAX_NOMBRE - suf.length).trim() + suf;
     if (!usados.has(t.toLowerCase())) return t;
   }
@@ -1398,7 +1418,7 @@ function nombreRutinaLibre(estado, nombre) {
     (con el rango/salto compartido). Si existe, se usa con MI configuración. Retirado: se usa y se puede reactivar.
     Propio: reutiliza uno propio ACTIVO del mismo catalogo_id (si viene del catálogo) o con el mismo nombre (normalizado)
     y grupo; si no, se crea (con catalogo_id, así trae sus ilustraciones). */
-function planCompartida(estado, datos) {
+function planCompartida(estado, datos, etiqueta) {
   const ejs = arr(estado && estado.ejercicios);
   const items = [], creados = [];
   for (const x of datos.ejercicios) {
@@ -1435,7 +1455,7 @@ function planCompartida(estado, datos) {
       }
     }
   }
-  return { nombre: nombreRutinaLibre(estado, datos.nombre), nombreOriginal: datos.nombre, items: items, creados: creados,
+  return { nombre: nombreRutinaLibre(estado, datos.nombre, etiqueta), nombreOriginal: datos.nombre, items: items, creados: creados,
     retirados: items.filter((i) => i.accion === "retirado").map((i) => i.ejercicio_id), omitidos: items.filter((i) => i.accion === "omitir").length };
 }
 /** Arma las listas nuevas completas (ejercicios y rutinas) sin tocar el estado: quien llama las asigna de una vez. */
@@ -1447,6 +1467,309 @@ function aplicarCompartida(estado, plan, op) {
   const res = guardarRutina(tmp, { id: null, nombre: plan.nombre, ejercicios: plan.items.filter((i) => i.ejercicio_id).map((i) => ({ ejercicio_id: i.ejercicio_id, series: i.series })) }, op.ahora);
   if (!res.ok) return res;
   return { ok: true, ejercicios: ejercicios, rutinas: res.rutinas, id: res.id };
+}
+
+/* ── balance muscular (tarjeta en Inicio y Progreso) ──────────────────────
+   Reglas simples y auditables sobre las series de TRABAJO de los últimos 7 días (hoy incluido), contadas por el
+   grupo PRINCIPAL del ejercicio (sin secundarios). Empuje = pecho + hombro + tríceps; tirón = espalda + bíceps.
+   1) Proporción: si uno es ≥ 2× el otro y el mayor suma ≥ 6 series. 2) Hueco: un grupo grande sin trabajar hace
+   8–60 días que la persona ya había entrenado en 2 días distintos o más (el de más días). 3) Si nada aplica y la
+   semana suma ≥ 6 series: mensaje positivo. Máximo 2 consejos. Sin datos suficientes (menos de 4 sesiones en
+   total o ninguna en los últimos 7 días) → null: no se muestra. */
+const EMPUJE = ["pecho", "hombro", "triceps"], TIRON = ["espalda", "biceps"];
+const BALANCE_MIN = 6, BALANCE_VECES = 2, BALANCE_HUECO = 8, BALANCE_HUECO_MAX = 60;
+const GRUPOS_GRANDES = [
+  { clave: "piernas", texto: "piernas", grupos: ["cuadriceps", "femoral", "gluteo"], icono: "🦵", frase: "Hoy podría ser su día." },
+  { clave: "espalda", texto: "espalda", grupos: ["espalda"], icono: "🪽", frase: "Un remo o un jalón y quedan en paz." },
+  { clave: "pecho", texto: "pecho", grupos: ["pecho"], icono: "🛡️", frase: "Un press y vuelve a sonreír." },
+  { clave: "hombro", texto: "hombros", grupos: ["hombro"], icono: "💪", frase: "Unas elevaciones laterales y listo." }
+];
+function balanceMuscular(estado, hoy) {
+  if (!esFecha(hoy)) hoy = fechaLocal();
+  const desde = sumarDias(hoy, -6);
+  const conTrabajo = sesionesValidas(estado).filter((s) => s.fecha <= hoy && tieneTrabajo(s));
+  const recientes = conTrabajo.filter((s) => s.fecha >= desde);
+  if (conTrabajo.length < 4 || !recientes.length) return null;
+  const grupoDe = (x) => { const e = ejercicioPorId(estado, x.ejercicio_id); return e ? e.grupo : null; };
+  const porGrupo = {};
+  let total = 0;
+  for (const s of recientes) for (const x of seriesDe(s)) {
+    if (x.tipo !== "trabajo") continue;
+    const g = grupoDe(x); if (!g) continue;
+    porGrupo[g] = (porGrupo[g] || 0) + 1; total += 1;
+  }
+  const suma = (gs) => gs.reduce((t, g) => t + (porGrupo[g] || 0), 0);
+  const empuje = suma(EMPUJE), tiron = suma(TIRON);
+  // días con cada grupo grande (fechas distintas)
+  const fechas = {};
+  GRUPOS_GRANDES.forEach((G) => { fechas[G.clave] = new Set(); });
+  for (const s of conTrabajo) {
+    const gs = new Set(seriesDe(s).filter((x) => x.tipo === "trabajo").map(grupoDe));
+    for (const G of GRUPOS_GRANDES) if (G.grupos.some((g) => gs.has(g))) fechas[G.clave].add(s.fecha);
+  }
+  const dias = {};
+  for (const G of GRUPOS_GRANDES) {
+    const lista = Array.from(fechas[G.clave]).sort();
+    dias[G.clave] = lista.length ? difDias(lista[lista.length - 1], hoy) : null;
+  }
+  const consejos = [];
+  const mayor = Math.max(empuje, tiron), menor = Math.min(empuje, tiron);
+  if (mayor >= BALANCE_MIN && mayor >= BALANCE_VECES * menor) {
+    const masEmpuje = empuje > tiron, a = masEmpuje ? "empuje" : "tirón", b = masEmpuje ? "tirón" : "empuje";
+    consejos.push({ tipo: "proporcion", icono: "⚖️",
+      titulo: menor === 0 ? "Esta semana: " + mayor + " series de " + a + " y ninguna de " + b + "."
+        : mayor / menor >= 5 ? "Esta semana: " + mayor + " series de " + a + " y solo " + menor + " de " + b + "."      // «31×» se lee raro
+        : "Esta semana: " + Math.round(mayor / menor) + "× más " + a + " que " + b + ".",
+      texto: masEmpuje ? "Suma un remo 😉" : "Suma un press 😉" });
+  }
+  const huecos = GRUPOS_GRANDES.filter((G) => dias[G.clave] != null && dias[G.clave] >= BALANCE_HUECO && dias[G.clave] <= BALANCE_HUECO_MAX && fechas[G.clave].size >= 2)
+    .sort((x, y) => dias[y.clave] - dias[x.clave]);
+  if (huecos.length) {
+    const G = huecos[0];
+    consejos.push({ tipo: "hueco", grupo: G.clave, icono: G.icono, titulo: "Llevas " + dias[G.clave] + " días sin " + G.texto + ".", texto: G.frase + " " + G.icono });
+  }
+  if (!consejos.length) {
+    if (total < BALANCE_MIN) return null;
+    consejos.push({ tipo: "parejo", icono: "👌", titulo: "Semana pareja.", texto: "Empuje y tirón equilibrados y ningún grupo grande olvidado. Así da gusto 💪" });
+  }
+  return { consejos: consejos.slice(0, 2), empuje: empuje, tiron: tiron, piernas: suma(GRUPOS_GRANDES[0].grupos), total: total, desde: desde, hasta: hoy, dias: dias };
+}
+
+/* ── logros e insignias ───────────────────────────────────────────────────
+   Se derivan del historial (cuentan hacia atrás, con la fecha y la sesión en que se lograron). Solo se guarda
+   qué logros ya se celebraron (documento.vistos.logros), para no repetir la celebración.
+   Tipos (el progreso es el máximo alcanzado): sesiones (con series de trabajo), racha (semanas ISO seguidas con
+   al menos una sesión), kilos (Σ peso × reps de trabajo, como kilosEntre), kilosSesion, minutos (una sesión de
+   hasta 5 h: las olvidadas abiertas no cuentan), records (veces que el peso top de un ejercicio superó todo lo
+   anterior, como el Recap), ejercicios (distintos), madrugador (empezó de 4:00 a 6:59), nocturno (de 21:00 a
+   3:59), finde (sábado y el domingo siguiente) y grupos (los 10 con al menos 1 serie efectiva en una semana). */
+const LOGROS = [
+  { id: "sesiones_1", icono: "🌱", titulo: "Primer paso", texto: "Tu primera sesión", tipo: "sesiones", meta: 1 },
+  { id: "sesiones_10", icono: "🔟", titulo: "Agarrando ritmo", texto: "10 sesiones", tipo: "sesiones", meta: 10 },
+  { id: "sesiones_50", icono: "🎯", titulo: "Medio centenar", texto: "50 sesiones", tipo: "sesiones", meta: 50 },
+  { id: "sesiones_100", icono: "💯", titulo: "Club de los 100", texto: "100 sesiones", tipo: "sesiones", meta: 100 },
+  { id: "racha_4", icono: "🔥", titulo: "Un mes sin fallar", texto: "4 semanas seguidas entrenando", tipo: "racha", meta: 4 },
+  { id: "racha_10", icono: "⚡", titulo: "Diez de diez", texto: "10 semanas seguidas entrenando", tipo: "racha", meta: 10 },
+  { id: "racha_26", icono: "🏔️", titulo: "Medio año imparable", texto: "26 semanas seguidas entrenando", tipo: "racha", meta: 26 },
+  { id: "toneladas_10", icono: "🏋️", titulo: "10 toneladas", texto: "10.000 kg levantados en total", tipo: "kilos", meta: 10000 },
+  { id: "toneladas_100", icono: "🐘", titulo: "100 toneladas", texto: "100.000 kg levantados en total", tipo: "kilos", meta: 100000 },
+  { id: "toneladas_500", icono: "🚀", titulo: "500 toneladas", texto: "500.000 kg levantados en total", tipo: "kilos", meta: 500000 },
+  { id: "sesion_5t", icono: "🦍", titulo: "Día pesado", texto: "5.000 kg en una sola sesión", tipo: "kilosSesion", meta: 5000 },
+  { id: "hora", icono: "⏱️", titulo: "Una hora de hierro", texto: "Una sesión de 60 minutos o más", tipo: "minutos", meta: 60 },
+  { id: "record_1", icono: "⭐", titulo: "Primer récord", texto: "Superaste tu peso máximo en un ejercicio", tipo: "records", meta: 1 },
+  { id: "record_10", icono: "🌟", titulo: "Coleccionista de récords", texto: "10 récords de peso", tipo: "records", meta: 10 },
+  { id: "ejercicios_5", icono: "🧩", titulo: "Curiosidad", texto: "5 ejercicios distintos", tipo: "ejercicios", meta: 5 },
+  { id: "ejercicios_20", icono: "🧭", titulo: "Espíritu explorador", texto: "20 ejercicios distintos", tipo: "ejercicios", meta: 20 },
+  { id: "madrugador", icono: "🌅", titulo: "Madrugón", texto: "Una sesión empezada antes de las 7:00", tipo: "madrugador", meta: 1 },
+  { id: "nocturno", icono: "🌙", titulo: "Turno de noche", texto: "Una sesión empezada a las 21:00 o más tarde", tipo: "nocturno", meta: 1 },
+  { id: "finde", icono: "🏖️", titulo: "Finde de hierro", texto: "Sábado y domingo del mismo fin de semana", tipo: "finde", meta: 1 },
+  { id: "cuerpo_completo", icono: "🗺️", titulo: "Cuerpo completo", texto: "Los 10 grupos musculares en una misma semana", tipo: "grupos", meta: 10 }
+];
+const esIdLogro = (x) => typeof x === "string" && /^[a-z0-9_]{1,40}$/.test(x);
+/** vistos = { logros: [ids ya celebrados o marcados en silencio], mes_descartado: "AAAA-MM" | null }. Ids
+    desconocidos con formato válido se conservan (logros de una versión más nueva). */
+function sanearVistos(v) {
+  v = v && typeof v === "object" && !Array.isArray(v) ? v : {};
+  const logros = Array.from(new Set(arr(v.logros).filter(esIdLogro))).slice(0, 300);
+  const mes = typeof v.mes_descartado === "string" && /^\d{4}-\d{2}$/.test(v.mes_descartado) && esFecha(v.mes_descartado + "-01") ? v.mes_descartado : null;
+  return { logros: logros, mes_descartado: mes };
+}
+/** Todos los logros con { logrado, fecha, sesion_id, actual, progreso 0–1 }, en el orden de la tabla. */
+function logrosDe(estado) {
+  const ses = sesionesValidas(estado).filter(tieneTrabajo).sort(ordenSesion);
+  const val = { sesiones: 0, racha: 0, kilos: 0, kilosSesion: 0, minutos: 0, records: 0, ejercicios: 0, madrugador: 0, nocturno: 0, finde: 0, grupos: 0 };
+  const hecho = {};
+  const ejercicios = new Set(), maxPrevio = {}, sabados = new Set(), porSemana = {};
+  let racha = 0, semanaAnt = null;
+  for (const s of ses) {
+    const t = seriesDe(s).filter((x) => x.tipo === "trabajo");
+    val.sesiones += 1;
+    const l = lunesDe(s.fecha);
+    if (l !== semanaAnt) { racha = semanaAnt && difDias(semanaAnt, l) === 7 ? racha + 1 : 1; semanaAnt = l; }
+    val.racha = Math.max(val.racha, racha);
+    const kgS = volumen(t);
+    val.kilos += kgS; val.kilosSesion = Math.max(val.kilosSesion, kgS);
+    const ini = numO(s.iniciada_en, null), fin = numO(s.terminada_en, null);
+    if (ini !== null && fin !== null && fin > ini && fin - ini <= 5 * 3600000) val.minutos = Math.max(val.minutos, Math.floor((fin - ini) / 60000));
+    if (ini !== null) { const h = new Date(ini).getHours(); if (h >= 4 && h < 7) val.madrugador = 1; if (h >= 21 || h < 4) val.nocturno = 1; }
+    const di = diaIso(s.fecha);
+    if (di === 6) sabados.add(s.fecha);
+    if (di === 7 && sabados.has(sumarDias(s.fecha, -1))) val.finde = 1;
+    const sem = porSemana[l] || (porSemana[l] = {}), mus = musculosDeSeries(estado, t);
+    for (const g of Object.keys(mus)) sem[g] = (sem[g] || 0) + mus[g];
+    val.grupos = Math.max(val.grupos, GRUPOS.filter((g) => (sem[g.valor] || 0) >= 1).length);
+    const hoyMax = {};
+    for (const x of t) { hoyMax[x.ejercicio_id] = Math.max(hoyMax[x.ejercicio_id] || 0, x.peso); ejercicios.add(x.ejercicio_id); }
+    for (const id of Object.keys(hoyMax)) {
+      if (maxPrevio[id] != null && hoyMax[id] > 0 && hoyMax[id] > maxPrevio[id]) val.records += 1;
+      maxPrevio[id] = Math.max(maxPrevio[id] == null ? 0 : maxPrevio[id], hoyMax[id]);
+    }
+    val.ejercicios = ejercicios.size;
+    for (const g of LOGROS) if (!hecho[g.id] && val[g.tipo] >= g.meta) hecho[g.id] = { fecha: s.fecha, sesion_id: s.id };
+  }
+  return LOGROS.map((g) => Object.assign({}, g, { logrado: !!hecho[g.id], fecha: hecho[g.id] ? hecho[g.id].fecha : null, sesion_id: hecho[g.id] ? hecho[g.id].sesion_id : null,
+    actual: Math.min(Math.round(val[g.tipo]), g.meta), progreso: Math.min(1, val[g.tipo] / g.meta) }));
+}
+function logrosDelPeriodo(estado, desde, hasta) {
+  return logrosDe(estado).filter((g) => g.logrado && g.fecha >= desde && g.fecha <= hasta).sort((a, b) => (a.fecha < b.fecha ? -1 : a.fecha > b.fecha ? 1 : 0));
+}
+/** Al terminar una sesión: qué celebrar y la lista nueva de vistos. Solo se celebran los que logró ESA sesión; los
+    demás nuevos (historial importado, documento viejo, logros que trae una versión nueva) se marcan en silencio. */
+function logrosParaCelebrar(estado, sesionId) {
+  const todos = logrosDe(estado), v = sanearVistos(estado && estado.vistos), ya = new Set(v.logros);
+  const nuevos = todos.filter((g) => g.logrado && !ya.has(g.id));
+  const celebrar = nuevos.filter((g) => sesionId && g.sesion_id === sesionId);
+  return { celebrar: celebrar, silenciosos: nuevos.length - celebrar.length, vistos: v.logros.concat(nuevos.map((g) => g.id)), cambia: nuevos.length > 0 };
+}
+
+/* ── «Tu mes»: mini resumen mensual con el motor y el dibujo del Recap ─────
+   Se ofrece en Inicio desde los 2 últimos días del mes hasta el día 5 del siguiente (esos días, el mes que
+   terminó), si el mes tiene 3 sesiones o más. Mismos criterios que el Recap. */
+const MES_MIN_SESIONES = 3;
+const diasDelMes = (mes) => { const p = partesFecha(String(mes) + "-01"); return p ? new Date(Date.UTC(p.a, p.m, 0)).getUTCDate() : 0; };
+function mesParaAviso(hoy) {
+  const p = partesFecha(hoy);
+  if (!p) return null;
+  const mes = hoy.slice(0, 7);
+  if (p.d >= diasDelMes(mes) - 1) return mes;
+  if (p.d <= 5) return mesSumar(mes, -1);
+  return null;
+}
+function sesionesDelMes(estado, mes) {
+  const desde = mes + "-01", hasta = mes + "-" + dos(diasDelMes(mes));
+  return sesionesValidas(estado).filter((s) => s.fecha >= desde && s.fecha <= hasta && tieneTrabajo(s)).sort(ordenSesion);
+}
+function resumenDelMes(estado, mes, hoy) {
+  if (!esFecha(hoy)) hoy = fechaLocal();
+  const p = partesFecha(String(mes) + "-01");
+  if (!p) return null;
+  const nDias = diasDelMes(mes), desde = mes + "-01", hasta = mes + "-" + dos(nDias);
+  const nombreMes = NOMBRES_MES[p.m - 1];
+  const pf = sanearPerfil(estado && estado.perfil);
+  const base = { tipo: "mes", mes: mes, anio: p.a, nombreMes: nombreMes, titulo: "Tu " + nombreMes, nombre: pf.nombre, figura: pf.figura,
+    minimo: MES_MIN_SESIONES, archivo: "rutina-" + mes };
+  const sesiones = sesionesDelMes(estado, mes);
+  if (sesiones.length < MES_MIN_SESIONES) return Object.assign(base, { pocas: true, sesiones: sesiones.length, faltan: MES_MIN_SESIONES - sesiones.length, pantallas: ["pocas"] });
+  let ms = 0;
+  const diasSet = new Set(), porEj = {}, seriesMes = [];
+  let series = 0, repeticiones = 0;
+  for (const s of sesiones) {
+    diasSet.add(s.fecha);
+    const ini = numO(s.iniciada_en, null), fin = numO(s.terminada_en, null);
+    if (ini !== null && fin !== null) { const d = fin - ini; if (d >= 5 * 60000 && d <= 5 * 3600000) ms += d; }
+    for (const x of seriesDe(s)) {
+      if (x.tipo !== "trabajo") continue;
+      seriesMes.push(x); series += 1; repeticiones += x.reps;
+      const o = porEj[x.ejercicio_id] || (porEj[x.ejercicio_id] = { id: x.ejercicio_id, reps: 0, series: 0, top: 0 });
+      o.reps += x.reps; o.series += 1; o.top = Math.max(o.top, x.peso);
+    }
+  }
+  const nombreEj = (id) => { const e = ejercicioPorId(estado, id); return e ? e.nombre : "Ejercicio borrado"; };
+  const top = Object.keys(porEj).map((k) => porEj[k]).sort((a, b) => b.reps - a.reps || b.series - a.series).slice(0, 3)
+    .map((o) => ({ id: o.id, nombre: nombreEj(o.id), reps: o.reps, series: o.series, top: o.top }));
+  // ¿el ejercicio estrella marcó récord de peso este mes? (peso top del mes > todo lo anterior al mes)
+  if (top[0]) {
+    let antes = null;
+    for (const s of sesionesValidas(estado)) if (s.fecha < desde) for (const x of seriesDe(s)) if (x.tipo === "trabajo" && x.ejercicio_id === top[0].id) antes = Math.max(antes == null ? 0 : antes, x.peso);
+    top[0].record = antes != null && top[0].top > 0 && top[0].top > antes;
+  }
+  const kilos = kilosEntre(estado, desde, hasta);
+  const anterior = sesionesDelMes(estado, mesSumar(mes, -1)).length;
+  // mapa del mes: cortes semanales (1 · 6 · 12) por las semanas del mes
+  const musculos = musculosDeSeries(estado, seriesMes);
+  const totalMus = GRUPOS.reduce((t, g) => t + (musculos[g.valor] || 0), 0), media = totalMus / GRUPOS.length;
+  const dominante = GRUPOS.map((g) => g.valor).sort((a, b) => (musculos[b] || 0) - (musculos[a] || 0))[0];
+  const parejo = media > 0 && (musculos[dominante] || 0) <= 1.5 * media;
+  const poco = (g) => (musculos[g] || 0) < 0.25 * media;
+  const sem = nDias / 7;
+  const mapa = { musculos: musculos, dominante: dominante, cortes: [1, Math.round(6 * sem), Math.round(12 * sem)],
+    titulo: parejo ? "Simetría total" : TITULOS_MAPA[dominante] || "Tu mapa del mes",
+    texto: parejo ? "Ningún músculo se quedó atrás" : "Lo que más trabajaste: " + textoGrupo(dominante) + " · " + miles(musculos[dominante]) + " series",
+    broma: media <= 0 ? null : ["cuadriceps", "femoral", "gluteo"].some(poco) ? "Las piernas te extrañan 😅" : poco("espalda") ? "La espalda te extraña 😅" : null };
+  // peso (solo con 2+ registros en el mes; no se comparte salvo que se active)
+  let peso = null;
+  const regs = pesosOrdenados(estado).filter((q) => q.fecha >= desde && q.fecha <= hasta);
+  if (regs.length >= 2) {
+    const delta = r2(regs[regs.length - 1].kg - regs[0].kg), o = pf.objetivo, abs = kg(Math.abs(delta));
+    let titulo, texto;
+    if (o === "ganar" && delta > 0) { titulo = "Ganaste " + abs + " kg"; texto = "Justo lo que buscabas"; }
+    else if (o === "bajar" && delta < 0) { titulo = "Bajaste " + abs + " kg"; texto = "Tu constancia se nota"; }
+    else if (o === "mantener" && Math.abs(delta) <= 1) { titulo = "Te mantuviste firme"; texto = "Todo el mes en tu peso"; }
+    else { titulo = "Registraste tu peso " + regs.length + " veces"; texto = "Conocerte también es entrenar"; }
+    peso = { registros: regs.length, delta: delta, objetivo: o, titulo: titulo, texto: texto, puntos: regs.map((q) => ({ fecha: q.fecha, kg: q.kg })) };
+  }
+  const todos = logrosDe(estado);
+  const logros = todos.filter((g) => g.logrado && g.fecha >= desde && g.fecha <= hasta).sort((a, b) => (a.fecha < b.fecha ? -1 : 1));
+  const proximo = todos.filter((g) => !g.logrado).sort((a, b) => b.progreso - a.progreso)[0] || null;      // el más cercano (orden de la tabla si empatan)
+  const pantallas = ["mes", "kilos", "estrella", "mapa"].concat(peso ? ["peso"] : []).concat(["logros"]);
+  return Object.assign(base, {
+    pocas: false, pantallas: pantallas, desde: desde, hasta: hasta, enCurso: hoy <= hasta,
+    sesiones: sesiones.length, dias: diasSet.size, horas: r1(ms / 3600000), anterior: anterior,
+    kilos: kilos, equivalencia: equivalencia(kilos), series: series, repeticiones: repeticiones, top: top,
+    mapa: mapa, peso: peso, logros: logros, proximo: proximo,
+    frases: { kilos: "En " + nombreMes + " levantaste", pesoPie: regs.length + " registros en el mes" },
+    textoCompartir: "Tu " + nombreMes + ": " + miles(kilos) + " kg en " + sesiones.length + " sesiones."
+  });
+}
+
+/* ── programas listos («Empezar con un programa», en Rutinas) ─────────────
+   Una rutina por día. Ejercicios: código base, o "c:<id>" del catálogo (se agrega como desde el catálogo).
+   Series por ejercicio; el rango de reps es el del ejercicio (base o catálogo; si ya lo tengo, el mío). */
+const PROGRAMAS = [
+  { id: "full3", nombre: "Full body", dias: 3, texto: "Todo el cuerpo en cada sesión. Ideal para empezar o si tienes poco tiempo.", rutinas: [
+    { n: "Full body A", e: [["sentadilla", 3], ["banca", 3], ["remo_barra", 3], ["press_hombro", 2], ["curl_femoral", 2], ["crunch_polea", 2]] },
+    { n: "Full body B", e: [["rumano", 3], ["inclinado_manc", 3], ["jalon", 3], ["zancadas", 2], ["laterales", 3], ["ext_polea", 2]] },
+    { n: "Full body C", e: [["prensa", 3], ["militar", 3], ["remo_polea", 3], ["hip_thrust", 3], ["curl_manc", 2], ["elev_piernas", 2]] }] },
+  { id: "tp4", nombre: "Torso / Pierna", dias: 4, texto: "Torso y pierna alternados: cada músculo dos veces por semana.", rutinas: [
+    { n: "Torso A", e: [["banca", 4], ["remo_barra", 4], ["militar", 3], ["jalon", 3], ["curl_barra", 2], ["ext_polea", 2]] },
+    { n: "Pierna A", e: [["sentadilla", 4], ["rumano", 3], ["prensa", 3], ["curl_femoral", 3], ["talones", 4], ["crunch_polea", 3]] },
+    { n: "Torso B", e: [["inclinado_manc", 3], ["dominadas", 3], ["c:arnold-press", 3], ["remo_manc", 3], ["laterales", 3], ["martillo", 2], ["ext_cabeza", 2]] },
+    { n: "Pierna B", e: [["hip_thrust", 3], ["bulgara", 3], ["ext_cuadriceps", 3], ["c:seated-leg-curl", 3], ["talones", 4], ["elev_piernas", 3]] }] },
+  { id: "ppl3", nombre: "Push / Pull / Legs", dias: 3, texto: "Empuje, tirón y pierna, una vez por semana cada uno.", rutinas: [
+    { n: "Empuje", e: [["banca", 4], ["inclinado_manc", 3], ["press_hombro", 3], ["laterales", 3], ["ext_polea", 3], ["ext_cabeza", 2]] },
+    { n: "Tirón", e: [["dominadas", 3], ["remo_barra", 3], ["remo_polea", 3], ["face_pull", 3], ["curl_barra", 3], ["martillo", 2]] },
+    { n: "Pierna", e: [["sentadilla", 4], ["rumano", 3], ["prensa", 3], ["curl_femoral", 3], ["talones", 4], ["crunch_polea", 3]] }] },
+  { id: "ppl6", nombre: "Push / Pull / Legs", dias: 6, texto: "Empuje, tirón y pierna dos veces por semana. Para quien ya tiene base.", rutinas: [
+    { n: "Empuje A", e: [["banca", 4], ["inclinado_manc", 3], ["press_hombro", 3], ["laterales", 3], ["ext_polea", 3], ["ext_cabeza", 2]] },
+    { n: "Tirón A", e: [["dominadas", 3], ["remo_barra", 3], ["remo_polea", 3], ["face_pull", 3], ["curl_barra", 3], ["martillo", 2]] },
+    { n: "Pierna A", e: [["sentadilla", 4], ["rumano", 3], ["prensa", 3], ["curl_femoral", 3], ["talones", 4], ["crunch_polea", 3]] },
+    { n: "Empuje B", e: [["militar", 4], ["press_maquina", 3], ["c:db-fly", 3], ["laterales", 3], ["c:close-grip-bench-press", 3], ["frances", 2]] },
+    { n: "Tirón B", e: [["jalon", 3], ["c:t-bar-row", 3], ["remo_manc", 3], ["c:rear-delt-fly", 3], ["c:incline-db-curl", 3], ["martillo", 2]] },
+    { n: "Pierna B", e: [["peso_muerto", 3], ["bulgara", 3], ["hip_thrust", 3], ["c:seated-leg-curl", 3], ["ext_cuadriceps", 3], ["talones", 4]] }] }
+];
+/** La rutina de un programa en el mismo formato que una compartida ya validada (así se reutiliza planCompartida). */
+function datosRutinaPrograma(r) {
+  const ejercicios = [];
+  for (const it of r.e) {
+    const ref = it[0], s = Math.min(10, Math.max(1, Math.round(it[1])));
+    if (ref.indexOf("c:") === 0) {
+      const c = catalogoDe(ref.slice(2));
+      if (c) ejercicios.push({ tipo: "propio", series: s, def: { nombre: c[1], grupo: c[2], secundarios: c[3].slice(), equipo: c[4], salto: 2.5,
+        reps_min: c[5], reps_max: c[6], series: 3, descanso_s: c[7], catalogo_id: c[0] } });
+    } else if (baseDe(ref)) ejercicios.push({ tipo: "base", codigo: ref, series: s, reps: null, salto: null });
+  }
+  return { nombre: r.n, ejercicios: ejercicios };
+}
+/** Qué crearía un programa, sin tocar el estado: listas completas nuevas (ejercicios y rutinas) para asignar de una
+    vez. Nunca reemplaza: si el nombre existe, «(programa)». Los retirados que use se reactivan (si no, la rutina
+    quedaría coja); los que faltan se crean desde la lista base o el catálogo. */
+function planPrograma(estado, id, ahora) {
+  const pr = PROGRAMAS.find((p) => p.id === id);
+  if (!pr) return null;
+  let tmp = { ejercicios: arr(estado && estado.ejercicios), rutinas: arr(estado && estado.rutinas) };
+  const rutinas = [], creados = [], reactivados = [];
+  for (const r of pr.rutinas) {
+    const plan = planCompartida(tmp, datosRutinaPrograma(r), "programa");
+    plan.retirados.forEach((x) => { if (reactivados.indexOf(x) < 0) reactivados.push(x); });
+    const res = aplicarCompartida(tmp, plan, { reactivar: true, ahora: ahora || Date.now() });
+    if (!res.ok) return null;
+    plan.creados.forEach((e) => creados.push(e));
+    tmp = { ejercicios: res.ejercicios, rutinas: res.rutinas };
+    rutinas.push({ id: res.id, nombre: plan.nombre, nombreOriginal: r.n, items: plan.items.filter((i) => i.ejercicio_id) });
+  }
+  const nuevos = new Set(creados.map((e) => e.id));
+  rutinas.forEach((r) => r.items.forEach((i) => { i.nuevo = nuevos.has(i.ejercicio_id); i.reactivado = reactivados.indexOf(i.ejercicio_id) >= 0; }));
+  return { programa: pr, rutinas: rutinas, creados: creados, reactivados: reactivados, ejercicios: tmp.ejercicios, rutinasNuevas: tmp.rutinas };
 }
 
 return {
@@ -1462,7 +1785,9 @@ return {
   resumenSesion, pesosOrdenados, promedioMovil, cambioPeso, registrarPeso, cambioDesdeInicio,
   equivalencia, kilosEntre, RECAP_MIN_SESIONES, anioRecap, recapDelAnio, OBJETIVOS, perfilVacio, sanearPerfil, slugNombre, nombreArchivo, leerPesoInicial,
   CATALOGO, esCatalogoId, catalogoDe, ilusCatalogo, ejercicioDesdeCatalogo, planCatalogo,
-  COMP_MAX_EJ, cargaDeRutina, validarCarga, planCompartida, aplicarCompartida, nombreRutinaLibre, normalNombre
+  COMP_MAX_EJ, cargaDeRutina, validarCarga, planCompartida, aplicarCompartida, nombreRutinaLibre, normalNombre,
+  balanceMuscular, LOGROS, logrosDe, logrosDelPeriodo, logrosParaCelebrar, sanearVistos,
+  MES_MIN_SESIONES, mesParaAviso, sesionesDelMes, resumenDelMes, PROGRAMAS, planPrograma
 };
 })();
 
@@ -2171,6 +2496,7 @@ document.addEventListener("visibilitychange", () => { if (document.visibilitySta
 /* ── navegación (con historial: el botón atrás de Android funciona) ── */
 function ir(vista, params, reemplazar) {
   ui.vista = vista; ui.params = params || {}; ui.edicion = null; ui.rirFila = null;
+  if (vista !== "resumen") ui.celebrar = null;          // la celebración de logros solo sale al terminar la sesión
   const st = { vista: vista, params: ui.params };
   try { if (reemplazar) history.replaceState(st, ""); else history.pushState(st, ""); } catch (e) { /* algunos orígenes no permiten historial */ }
   cerrarHojas();
@@ -2305,6 +2631,7 @@ function vInicio() {
       '</span><span class="num" style="font-size:28px;font-weight:700">' + L.kg(u.kg) + ' <small class="tenue" style="font-size:14px;font-weight:500">kg</small></span></span><span class="pequeno tenue num" style="text-align:right">' +
       (c7 ? (c7.delta > 0 ? "+" : "") + L.kg(c7.delta) + " kg en 7 días" : "Sin dato de hace 7 días") + "</span></button>";
   }
+  if (!DEMO) h += tarjetaBalance(true);        // demos: Inicio sin tarjetas nuevas (sus escenas dependen del diseño)
   h += calendario(f);
   if (!activos.length) {
     h += '<section class="tarjeta col"><h2>Todavía no hay ejercicios</h2><span class="tenue">Empieza con la lista base o arma la tuya.</span><button class="btn prim ancho" data-a="sembrar">Cargar la lista base (32 ejercicios comunes)</button><button class="btn ancho" data-a="nuevoEj">Crear los míos</button></section>';
@@ -2313,6 +2640,10 @@ function vInicio() {
   } else {
     const toca = L.rutinaQueToca(estado);
     h += '<div class="col"><button class="btn prim grande" data-a="entrenar">Entrenar</button>' + (toca ? '<span class="pequeno tenue" style="text-align:center">Hoy toca ' + esc(toca.nombre) + "</span>" : "") + "</div>";
+  }
+  if (!DEMO && activos.length && !enCurso && !estado.rutinas.length) {      // sin rutinas: sugerir un programa listo
+    h += '<section class="tarjeta col"><h2>¿Sin rutina todavía?</h2><span class="pequeno tenue">Empieza con un programa listo: Full body, Torso / Pierna o Push / Pull / Legs. Lo puedes cambiar cuando quieras.</span>' +
+      '<button class="btn ancho" data-a="programas">Ver programas</button></section>';
   }
   return h + "</main>";
 }
@@ -2323,7 +2654,19 @@ function avisosInicio(c) {
     h += '<div class="nota" role="status">' + ic("reloj") + '<div class="cuerpo"><b>' + esc(c.textoAviso.titulo) + "</b><span>" + esc(c.textoAviso.detalle) +
       (toca ? " Cuando puedas, " + esc(toca.nombre) + " está lista para empezar." : " Cuando puedas, aquí estamos.") + "</span></div></div>";
   }
-  if (DEMO) return h;   // demos: sin avisos de respaldo ni de instalar
+  if (DEMO) return h;   // demos: sin avisos de respaldo ni de instalar (ni «Tu mes», que depende de la fecha)
+  /* «Tu mes»: de los 2 últimos días del mes al día 5 del siguiente, con 3+ sesiones, hasta que se descarte. */
+  const mesA = L.mesParaAviso(hoy());
+  if (mesA && L.sanearVistos(estado.vistos).mes_descartado !== mesA) {
+    const n = L.sesionesDelMes(estado, mesA).length;
+    if (n >= L.MES_MIN_SESIONES) {
+      const pm = L.partesFecha(mesA + "-01"), nombre = L.NOMBRES_MES[pm.m - 1], enCurso = hoy().slice(0, 7) === mesA;
+      const kMes = L.kilosEntre(estado, mesA + "-01", L.sumarDias(L.mesSumar(mesA, 1) + "-01", -1));
+      h += '<div class="nota suave" role="status"><span class="emoji" aria-hidden="true">🗓️</span><div class="cuerpo"><b>Tu ' + esc(nombre) + " está listo 🎉</b><span class=\"pequeno\">" + n + " sesiones · " + L.miles(kMes) + " kg" +
+        (enCurso ? ". Aún quedan días del mes: míralo ya o espera al cierre." : ". Un resumen corto para guardar o compartir.") + '</span><div class="acciones"><button class="btn prim" data-a="tuMes" data-mes="' + mesA + '">Ver mi mes</button>' +
+        '<button class="btn" data-a="descartarMes" data-mes="' + mesA + '">Ahora no</button></div></div></div>';
+    }
+  }
   /* Respaldo manual, igual en Android e iPhone: aviso a los 3 días sin respaldo (solo cuentan los
      compartidos y descargas que salieron bien). */
   if (P.respaldoVencido()) {
@@ -2682,7 +3025,8 @@ const RECAP_W = 1080, RECAP_H = 1920, RECAP_M = 90;
 const RECAP_FONDOS = {
   portada: ["#3C7590", "#24495A", "#14262F"], constancia: ["#2C6C82", "#1B3F4E", "#0F1E26"], kilos: ["#F08A4B", "#B5481F", "#5A200D"],
   ejercicios: ["#4E8C5E", "#2A5636", "#11261A"], mapa: ["#3C7590", "#24495A", "#14262F"], peso: ["#7A6BB0", "#47407A", "#1E1A3A"],
-  arquetipo: ["#E4572E", "#9C3418", "#3F150A"], final: ["#3C7590", "#24495A", "#14262F"], pocas: ["#3C7590", "#24495A", "#14262F"]
+  arquetipo: ["#E4572E", "#9C3418", "#3F150A"], final: ["#3C7590", "#24495A", "#14262F"], pocas: ["#3C7590", "#24495A", "#14262F"],
+  mes: ["#3C7590", "#24495A", "#14262F"], estrella: ["#4E8C5E", "#2A5636", "#11261A"], logros: ["#E4572E", "#9C3418", "#3F150A"]
 };
 const RECAP_CLARO = "#CFE3EC", RECAP_ACENTO = "#F6C28B";
 const recapFiguras = { clave: null, imgs: null };
@@ -2821,7 +3165,7 @@ const PANTALLAS_RECAP = {
   },
   kilos(c, r, t) {
     const W = RECAP_W, M = RECAP_M;
-    escribir(c, "Este año levantaste", M, 420, { f: ["700", 66], a: tramo(t, 0) });
+    escribir(c, (r.frases && r.frases.kilos) || "Este año levantaste", M, 420, { f: ["700", 66], a: tramo(t, 0) });
     c.save(); c.globalAlpha = tramo(t, 0.05); c.font = fuente("800", 200); c.textAlign = "left"; c.fillStyle = "#FFFFFF";
     c.fillText(L.miles(contar(r.kilos, t)), M, 650, W - 2 * M); c.restore();
     escribir(c, "kilos", M, 760, { f: ["700", 80], color: RECAP_ACENTO, a: tramo(t, 0.1) });
@@ -2883,7 +3227,7 @@ const PANTALLAS_RECAP = {
     c.restore();
     escribir(c, L.kg(pts[0].kg) + " kg", x0, y1 + 100, { f: ["600", 40], color: RECAP_CLARO, a: tramo(t, 0.3) });
     escribir(c, L.kg(pts[pts.length - 1].kg) + " kg", x1, y1 + 100, { f: ["700", 40], a: tramo(t, 0.8), alin: "right" });
-    escribir(c, p.registros + " registros en el año", M, 1760, { f: ["500", 42], color: RECAP_CLARO, a: tramo(t, 0.5) });
+    escribir(c, (r.frases && r.frases.pesoPie) || p.registros + " registros en el año", M, 1760, { f: ["500", 42], color: RECAP_CLARO, a: tramo(t, 0.5) });
   },
   arquetipo(c, r, t) {
     const W = RECAP_W, M = RECAP_M, q = r.arquetipo;
@@ -2893,7 +3237,73 @@ const PANTALLAS_RECAP = {
     const y = escribir(c, q.titulo, W / 2, 1300, { f: ["800", 118], a: tramo(t, 0.3), alin: "center", max: 3 });
     escribir(c, q.texto, W / 2, y + 30, { f: ["500", 52], color: "#FFE3CF", a: tramo(t, 0.45), alin: "center", max: 3 });
   },
-  final(c, r, t, op) { dibujarFinalRecap(c, r, RECAP_W, RECAP_H, t, !!(op && op.conPeso)); }
+  final(c, r, t, op) { dibujarFinalRecap(c, r, RECAP_W, RECAP_H, t, !!(op && op.conPeso)); },
+  /* «Tu mes» (L.resumenDelMes): portada con sesiones, ejercicio estrella y logros; kilos, mapa y peso son los del Recap. */
+  mes(c, r, t) {
+    const W = RECAP_W, M = RECAP_M;
+    escribir(c, "Tu", M, 470, { f: ["800", 150], a: tramo(t, 0) });
+    escribir(c, r.nombreMes, M, 640, { f: ["800", 150], color: RECAP_ACENTO, a: tramo(t, 0.08), encoger: true });
+    escribir(c, (r.nombre ? r.nombre + " · " : "") + r.anio, M, 750, { f: ["700", 56], color: RECAP_CLARO, a: tramo(t, 0.14), max: 1 });
+    c.save(); c.globalAlpha = tramo(t, 0.2); c.font = fuente("800", 230); c.textAlign = "left"; c.fillStyle = "#FFFFFF"; c.fillText(String(contar(r.sesiones, t)), M, 1080); c.restore();
+    escribir(c, r.sesiones === 1 ? "sesión" : "sesiones", M, 1160, { f: ["600", 56], color: RECAP_CLARO, a: tramo(t, 0.25) });
+    const mitad = (W - 2 * M) / 2;
+    const cols = [{ v: String(contar(r.dias, t)), e: r.dias === 1 ? "día entrenado" : "días entrenados" },
+      r.horas > 0 ? { v: L.kg(Math.round(r.horas * suave(t) * 10) / 10), e: "horas entrenando" } : { v: L.miles(contar(r.series, t)), e: "series de trabajo" }];
+    cols.forEach((co, i) => {
+      const x = M + i * (mitad + 20), a = tramo(t, 0.32 + i * 0.08);
+      c.save(); c.globalAlpha = a; c.font = fuente("800", 120); c.textAlign = "left"; c.fillStyle = "#FFFFFF"; c.fillText(co.v, x, 1400, mitad - 20); c.restore();
+      escribir(c, co.e, x, 1465, { f: ["600", 42], color: RECAP_CLARO, a: a, ancho: mitad - 30 });
+    });
+    const pm = L.partesFecha(r.mes + "-01"), antes = L.NOMBRES_MES[(pm.m + 10) % 12];
+    const frase = !r.anterior ? "¡Arrancaste con todo! 🚀" : r.sesiones > r.anterior ? "+" + (r.sesiones - r.anterior) + (r.sesiones - r.anterior === 1 ? " sesión" : " sesiones") + " que en " + antes + " 🚀"
+      : r.sesiones === r.anterior ? "Igual que en " + antes + ": constancia pura" : "Cada sesión cuenta. ¡Vamos por más! 💪";
+    escribir(c, frase, M, 1680, { f: ["700", 52], color: RECAP_ACENTO, a: tramo(t, 0.5), max: 2 });
+  },
+  estrella(c, r, t) {
+    const W = RECAP_W, M = RECAP_M, e = r.top[0];
+    escribir(c, "Tu ejercicio estrella", M, 330, { f: ["800", 84], a: tramo(t, 0), max: 2 });
+    if (!e) return;
+    let y = escribir(c, e.nombre, M, 520, { f: ["800", 100], color: RECAP_ACENTO, a: tramo(t, 0.08), max: 3 });
+    y = escribir(c, L.miles(contar(e.reps, t)) + " repeticiones · " + e.series + " series", M, y + 20, { f: ["600", 50], a: tramo(t, 0.15) });
+    if (e.top > 0) escribir(c, "Peso top: " + L.kg(e.top) + " kg" + (e.record ? " · ¡récord! ⭐" : ""), M, y + 10, { f: ["600", 46], color: RECAP_CLARO, a: tramo(t, 0.22) });
+    const k = 0.6 + 0.4 * tramo(t, 0.3, 0.4);
+    c.save(); c.globalAlpha = tramo(t, 0.3); c.translate(W / 2, 1180); c.scale(k, k); c.font = fuente("", 300); c.textAlign = "center"; c.textBaseline = "middle"; c.fillText("🏆", 0, 0); c.restore();
+    if (r.top.length > 1) {
+      let yy = escribir(c, "También brillaron", M, 1500, { f: ["600", 40], color: RECAP_CLARO, a: tramo(t, 0.45) });
+      r.top.slice(1).forEach((o, i) => {
+        const a = tramo(t, 0.5 + i * 0.07);
+        escribir(c, o.nombre, M, yy + 20, { f: ["700", 46], a: a, max: 1 });
+        yy = escribir(c, L.miles(o.reps) + " repeticiones", M, yy + 72, { f: ["500", 36], color: RECAP_CLARO, a: a });
+      });
+    }
+  },
+  logros(c, r, t) {
+    const W = RECAP_W, M = RECAP_M, lista = r.logros.slice(0, 6);
+    escribir(c, "Logros del mes", M, 330, { f: ["800", 96], a: tramo(t, 0) });
+    if (lista.length) {
+      lista.forEach((g, i) => {
+        const y = 520 + i * 170, a = tramo(t, 0.08 + i * 0.07);
+        c.save(); c.globalAlpha = a; c.font = fuente("", 90); c.textAlign = "left"; c.textBaseline = "alphabetic"; c.fillText(g.icono, M, y + 40); c.restore();
+        escribir(c, g.titulo, M + 130, y, { f: ["800", 54], a: a, max: 1, ancho: W - 2 * M - 130 });
+        escribir(c, g.texto + " · " + L.fechaCorta(g.fecha), M + 130, y + 56, { f: ["500", 36], color: RECAP_CLARO, a: a, max: 1, ancho: W - 2 * M - 130 });
+      });
+      if (r.logros.length > 6) escribir(c, "+" + (r.logros.length - 6) + " más", M + 130, 520 + 6 * 170 - 40, { f: ["700", 40], color: RECAP_ACENTO, a: tramo(t, 0.6) });
+    } else {
+      c.save(); c.globalAlpha = tramo(t, 0.1); c.font = fuente("", 260); c.textAlign = "center"; c.fillText("🌱", W / 2, 820); c.restore();
+      const y = escribir(c, "Este mes no cayó ninguna insignia… todavía.", M, 1060, { f: ["800", 70], a: tramo(t, 0.2), max: 3 });
+      escribir(c, "Cada sesión suma para la próxima.", M, y + 20, { f: ["500", 48], color: RECAP_CLARO, a: tramo(t, 0.3) });
+    }
+    const p = r.proximo;
+    if (p) {
+      const a = tramo(t, 0.65);
+      escribir(c, "Lo próximo: " + p.icono + " " + p.titulo, M, 1620, { f: ["700", 44], a: a, max: 1 });
+      c.save(); c.globalAlpha = a;
+      c.fillStyle = "rgba(255,255,255,0.16)"; pildoraCanvas(c, M, 1660, W - 2 * M, 28, 14); c.fill();
+      c.fillStyle = RECAP_ACENTO; pildoraCanvas(c, M, 1660, Math.max(28, (W - 2 * M) * p.progreso * tramo(t, 0.7, 0.5)), 28, 14); c.fill();
+      c.restore();
+      escribir(c, textoProgresoLogro(p), M, 1745, { f: ["500", 36], color: RECAP_CLARO, a: a, max: 1 });
+    }
+  }
 };
 /** Tarjeta final en 1080×1920 (historias) o 1080×1350 (feed). El peso solo sale con conPeso. */
 function dibujarFinalRecap(c, r, W, H, t, conPeso) {
@@ -2921,7 +3331,7 @@ function dibujarFinalRecap(c, r, W, H, t, conPeso) {
   escribir(c, r.mapa.titulo, W / 2, P.mapTit, { f: ["800", 60], a: tramo(t, 0.5), alin: "center", max: 1 });
   if (conPeso && r.peso) escribir(c, "Peso: " + r.peso.titulo.toLowerCase(), W / 2, P.peso, { f: ["600", 38], color: RECAP_ACENTO, a: tramo(t, 0.6), alin: "center", max: 1 });
   c.save(); c.globalAlpha = 0.85 * tramo(t, 0.6); c.font = fuente("500", 34); c.textAlign = "left"; c.fillStyle = RECAP_CLARO;
-  c.fillText(L.miles(r.diasConApp) + (r.diasConApp === 1 ? " día" : " días") + " con la app", M, H - 80, W - 2 * M - 220); c.restore();
+  c.fillText(L.miles(r.diasConApp) + (r.diasConApp === 1 ? " día" : " días") + " con la app" + (r.logros ? " · " + r.logros + (r.logros === 1 ? " logro" : " logros") : ""), M, H - 80, W - 2 * M - 220); c.restore();
 }
 function dibujarPantallaRecap(ctx, recap, indice, t, op) {
   const clave = recap.pantallas[indice] || recap.pantallas[0];
@@ -2939,12 +3349,15 @@ function textoPantallaRecap(r, clave) {
     case "pocas": return r.titulo + ". Llevas " + r.sesiones + " sesiones este año. Desde " + r.minimo + " sesiones armamos tu Recap.";
     case "portada": return r.titulo + (r.nombre ? ", " + r.nombre : "") + ". " + r.diasConApp + " días con la app. " + r.intro;
     case "constancia": return "Constancia: " + r.sesiones + " sesiones, " + (r.horas > 0 ? L.kg(r.horas) + " horas, " : "") + "mejor racha " + r.mejorRacha + " semanas. " + r.diaFavorito.texto + "." + (r.franja ? " " + r.franja.titulo + "." : "");
-    case "kilos": return "Este año levantaste " + L.miles(r.kilos) + " kilos." + (r.equivalencia ? " Es como levantar " + r.equivalencia.texto + "." : "");
+    case "mes": return r.titulo + " " + r.anio + ": " + r.sesiones + " sesiones en " + r.dias + " días.";
+    case "estrella": return "Tu ejercicio estrella: " + (r.top[0] ? r.top[0].nombre + ", " + r.top[0].reps + " repeticiones." : "");
+    case "logros": return "Logros del mes: " + (r.logros.length ? r.logros.map((g) => g.titulo).join(", ") + "." : "ninguno todavía.") + (r.proximo ? " Lo próximo: " + r.proximo.titulo + "." : "");
+    case "kilos": return ((r.frases && r.frases.kilos) || "Este año levantaste") + " " + L.miles(r.kilos) + " kilos." + (r.equivalencia ? " Es como levantar " + r.equivalencia.texto + "." : "");
     case "ejercicios": return "Tus ejercicios estrella: " + r.top.map((e) => e.nombre + ", " + e.reps + " repeticiones").join("; ") + "." + (r.mejorado ? " El más mejorado: " + r.mejorado.nombre + ", " + r.mejorado.texto + "." : "") + " " + r.records + " récords de peso.";
     case "mapa": return r.mapa.titulo + ". " + r.mapa.texto + "." + (r.mapa.broma ? " " + r.mapa.broma : "");
     case "peso": return "Tu peso: " + r.peso.titulo + ". " + r.peso.texto + ".";
     case "arquetipo": return "Tu tipo de atleta: " + r.arquetipo.titulo + ". " + r.arquetipo.texto + ".";
-    default: return "Resumen: " + L.miles(r.kilos) + " kilos, " + r.sesiones + " sesiones, tipo de atleta " + r.arquetipo.titulo + ".";
+    default: return "Resumen: " + L.miles(r.kilos) + " kilos, " + r.sesiones + " sesiones, tipo de atleta " + r.arquetipo.titulo + "." + (r.logros ? " " + r.logros + " logros en el año." : "");
   }
 }
 async function imagenRecap(recap, indice, alto, conPeso) {
@@ -2963,7 +3376,22 @@ const visor = { abierto: false, recap: null, i: 0, t0: 0, pausaEn: null, conPeso
 const sinMovimiento = () => { try { return matchMedia("(prefers-reduced-motion: reduce)").matches; } catch (e) { return false; } };
 async function abrirRecap() {
   if (!estado || visor.abierto) return;
-  const recap = L.recapDelAnio(estado, L.anioRecap(hoy()), hoy());
+  await abrirVisor(L.recapDelAnio(estado, L.anioRecap(hoy()), hoy()));
+}
+/* «Tu mes» usa el mismo visor y el mismo dibujo (L.resumenDelMes da sus pantallas). */
+async function abrirTuMes(mes) {
+  if (!estado || visor.abierto) return;
+  const r = L.resumenDelMes(estado, mes, hoy());
+  if (!r || r.pocas) { toast("Ese mes tiene menos de " + L.MES_MIN_SESIONES + " sesiones"); return; }
+  await abrirVisor(r);
+  // visto en Inicio: se da por descartado (si el mes ya terminó; en sus 2 últimos días vuelve a ofrecerse ya completo)
+  if (!r.enCurso && L.mesParaAviso(hoy()) === mes) descartarMes(mes);    // repinta #app debajo del visor
+}
+function descartarMes(mes, sinRender) {
+  cambiar((d) => { const v = L.sanearVistos(d.vistos); v.mes_descartado = mes; d.vistos = v; }, sinRender);
+}
+async function abrirVisor(recap) {
+  if (!estado || visor.abierto || !recap) return;
   await prepararRecap(recap);
   Object.assign(visor, { abierto: true, recap: recap, i: 0, conPeso: false, pausaEn: null, pulso: null, compartiendo: false });
   document.body.insertAdjacentHTML("beforeend", '<div class="recap" id="recap" role="dialog" aria-modal="true" aria-label="' + esc(recap.titulo) + '">' +
@@ -3062,8 +3490,8 @@ async function compartirRecap(el) {
   try {
     const alto = formato === "feed" ? 1350 : RECAP_H;
     const img = await imagenRecap(r, visor.i, alto, conPeso);
-    const nombre = "rutina-recap-" + r.anio + "-" + (formato === "feed" ? "feed" : clave) + ".png";
-    await compartirImagen(img, nombre, r.titulo + ": " + L.miles(r.kilos) + " kg en " + r.sesiones + " sesiones.");
+    const nombre = (r.archivo || "rutina-recap-" + r.anio) + "-" + (formato === "feed" ? "feed" : clave) + ".png";
+    await compartirImagen(img, nombre, r.textoCompartir || r.titulo + ": " + L.miles(r.kilos) + " kg en " + r.sesiones + " sesiones.");
   } catch (e) {
     if (!(e && e.name === "AbortError")) toast("No se pudo compartir. Prueba otra vez.");
   } finally {
@@ -3085,6 +3513,12 @@ function vResumen() {
   let h = '<main class="vista" style="padding-top:32px;gap:18px"><div class="col" style="align-items:center;text-align:center;gap:10px"><span style="width:60px;height:60px;border-radius:30px;display:flex;align-items:center;justify-content:center;background:' +
     (celebra ? "var(--warn-bg);color:var(--warn-ink)" : "var(--soft);color:var(--accent)") + '">' + ic(celebra ? "estrella" : "check", 28, 2.2) + '</span><h1 style="margin:0;font-size:27px;font-weight:700">' + esc(r.titulo) + '</h1><span class="tenue">' +
     esc(r.nombre + " · " + L.fechaLarga(r.fecha)) + "</span></div>";
+  const cel = ui.celebrar && ui.celebrar.sesion === r.sesion.id ? ui.celebrar.logros : null;
+  if (cel && cel.length) {
+    h += '<section class="tarjeta col celebra" style="gap:10px" role="status" aria-label="Logros nuevos"><h2>' + (cel.length > 1 ? "¡" + cel.length + " logros nuevos!" : "¡Logro desbloqueado!") + "</h2>" +
+      cel.slice(0, 3).map((g) => '<div class="consejo"><span class="ico" aria-hidden="true">' + g.icono + "</span><span><b>" + esc(g.titulo) + "</b> · " + esc(g.texto) + "</span></div>").join("") +
+      (cel.length > 3 ? '<span class="pequeno">Y ' + (cel.length - 3) + " más en Progreso → Logros.</span>" : "") + "</section>";
+  }
   h += tarjetaKilos(r.kilos, r.fecha === hoy() ? "Hoy levantaste" : "Ese día levantaste", L.fechaCorta(r.fecha));
   h += seccionMapa(r.musculos, { titulo: r.fecha === hoy() ? "Músculos de hoy" : "Músculos de ese día", cortes: MAPA_CORTES.sesion,
     kicker: (r.fecha === hoy() ? "Músculos de hoy · " : "Músculos · ") + L.fechaCorta(r.fecha),
@@ -3141,6 +3575,7 @@ function vEjercicios() {
       esc(r.ejercicios.map((x) => (L.ejercicioPorId(estado, x.ejercicio_id) || {}).nombre).filter(Boolean).join(", ")) + "</span></span>" + ic("der", 18) + "</button>").join("") + "</div>"
       : '<p class="tenue">Las rutinas son opcionales: guarda las que repites seguido. Una sesión también puede empezar repitiendo la anterior o en blanco.</p>';
     h += '<button class="btn prim ancho" data-a="editarRutina" data-id="">' + ic("plus", 18) + " Nueva rutina</button>";
+    h += '<button class="btn ancho" data-a="programas">Empezar con un programa</button>';
     h += '<button class="btn ancho" data-a="pegarRutina">Pegar rutina compartida</button><span class="mini tenue" style="text-align:center">¿Te enviaron una rutina? Copia el mensaje y toca «Pegar rutina compartida».</span>';
     return h + "</main>";
   }
@@ -3263,6 +3698,7 @@ function vProgreso() {
   const enBanda = vol.filter((v) => v.series >= L.SERIES_MIN && v.series <= L.SERIES_MAX).length;
   const fin = L.sumarDias(lunes, 6);
   let h = '<main class="vista"><header class="cab"><div class="t"><h1>Progreso</h1></div>' + pildora() + "</header>";
+  h += tarjetaBalance(false);
   const esta = lunes === L.lunesDe(f);
   const kSem = L.kilosEntre(estado, lunes, fin);
   h += '<div class="pestanas" style="align-items:center;justify-content:space-between"><button class="icono" style="height:44px" data-a="semana" data-d="-7" aria-label="Semana anterior">' + ic("izq", 18) + '</button><span style="font-weight:600;font-size:14px" aria-live="polite">' +
@@ -3290,6 +3726,8 @@ function vProgreso() {
   h += '<div class="pestanas" style="align-items:center;justify-content:space-between"><button class="icono" style="height:44px" data-a="mesKilos" data-d="-1" aria-label="Mes anterior">' + ic("izq", 18) + '</button><span style="font-weight:600;font-size:14px">' +
     esc(L.mayuscula(nombreMes)) + '</span><button class="icono" style="height:44px" data-a="mesKilos" data-d="1" aria-label="Mes siguiente"' + (mesActual ? " disabled" : "") + ">" + ic("der", 18) + "</button></div>";
   h += kMes > 0 ? tarjetaKilos(kMes, mesActual ? "Este mes levantaste" : "Ese mes levantaste", L.mayuscula(nombreMes)) : '<p class="tenue pequeno" style="margin:0;text-align:center">Sin series de trabajo en ' + esc(nombreMes) + ".</p>";
+  if (pm && L.sesionesDelMes(estado, mesK).length >= L.MES_MIN_SESIONES)
+    h += '<button class="btn ancho" data-a="tuMes" data-mes="' + mesK + '">🗓️ Ver «Tu ' + esc(L.NOMBRES_MES[pm.m - 1]) + "»</button>";
   // por ejercicio
   const conDatos = estado.ejercicios.filter((e) => L.puntosEjercicio(estado, e.id).length > 0);
   conDatos.sort((a, b) => (b.destacado - a.destacado) || a.nombre.localeCompare(b.nombre, "es"));
@@ -3312,6 +3750,7 @@ function vProgreso() {
     }
     h += "</div></section>";
   }
+  h += seccionLogros();
   // historial de sesiones
   const ses = L.sesionesValidas(estado).filter((s) => s.terminada_en != null).sort((a, b) => L.ordenSesion(b, a));
   const inval = estado.sesiones.filter((s) => !L.esFecha(s.fecha)).length;
@@ -3321,6 +3760,80 @@ function vProgreso() {
   }).join("") + "</div>" : '<span class="tenue pequeno">Las sesiones terminadas aparecen aquí para verlas o corregirlas.</span>') +
     (ses.length > ui.verSesiones ? '<button class="btn texto" data-a="masSesiones">Ver más</button>' : "") + (inval ? '<span class="mini tenue">' + inval + " sesión(es) con fecha inválida se conservan pero no se muestran.</span>" : "") + "</section></main>";
   return h;
+}
+/* ── Balance muscular (L.balanceMuscular): compacta en Inicio (1 consejo, lleva a Progreso), completa en Progreso ── */
+function tarjetaBalance(compacta) {
+  const b = L.balanceMuscular(estado, hoy());
+  if (!b) return "";
+  const cs = compacta ? b.consejos.slice(0, 1) : b.consejos;
+  const cuerpo = '<div class="fila entre"><h2>Balance muscular</h2><span class="mini tenue">Últimos 7 días</span></div>' +
+    cs.map((c) => '<div class="consejo"><span class="ico" aria-hidden="true">' + c.icono + "</span><span><b>" + esc(c.titulo) + "</b> " + esc(c.texto) + "</span></div>").join("") +
+    (compacta ? (b.consejos.length > 1 ? '<span class="mini tenue">Un consejo más en Progreso.</span>' : "")
+      : '<span class="mini tenue">Series de trabajo por grupo principal: empuje ' + b.empuje + " · tirón " + b.tiron + " · piernas " + b.piernas + ". Empuje = pecho, hombro y tríceps; tirón = espalda y bíceps.</span>");
+  return compacta ? '<button class="tarjeta col" style="gap:8px" data-a="ir" data-v="progreso" aria-label="Balance muscular: ' + esc(cs.map((c) => c.titulo + " " + c.texto).join(" ")) + '">' + cuerpo + "</button>"
+    : '<section class="tarjeta col" style="gap:8px" aria-label="Balance muscular">' + cuerpo + "</section>";
+}
+/* ── Logros (L.logrosDe): conseguidos con su fecha y pendientes con su progreso ── */
+function textoProgresoLogro(g) {
+  if (g.meta === 1) return g.logrado ? "Conseguido" : "Aún no";
+  const u = { sesiones: " sesiones", racha: " semanas (tu mejor racha)", kilos: " kg", kilosSesion: " kg (tu mejor sesión)", minutos: " min (tu sesión más larga)",
+    records: " récords", ejercicios: " ejercicios", grupos: " grupos (tu mejor semana)" }[g.tipo] || "";
+  return L.miles(g.actual) + " de " + L.miles(g.meta) + u;
+}
+function fechaLogro(f) { return L.fechaCorta(f) + (f.slice(0, 4) !== hoy().slice(0, 4) ? " " + f.slice(0, 4) : ""); }
+function seccionLogros() {
+  const todos = L.logrosDe(estado);
+  const hechos = todos.filter((g) => g.logrado).sort((a, b) => (a.fecha < b.fecha ? 1 : a.fecha > b.fecha ? -1 : 0));
+  const pend = todos.filter((g) => !g.logrado).sort((a, b) => b.progreso - a.progreso);
+  let h = '<section class="col" aria-label="Logros"><div class="fila entre"><h2>Logros</h2><span class="pequeno tenue">' + hechos.length + " de " + todos.length + "</span></div>";
+  const verH = ui.verLogros ? hechos : hechos.slice(0, 5);
+  h += hechos.length ? '<div class="lista">' + verH.map((g) => '<div class="it logro"><span class="emoji" aria-hidden="true">' + g.icono + '</span><span class="txt"><b>' + esc(g.titulo) + "</b><span>" + esc(g.texto) +
+    '</span></span><span class="marca record">' + esc(fechaLogro(g.fecha)) + "</span></div>").join("") + "</div>"
+    : '<span class="tenue pequeno">Tu primer logro llega con tu primera sesión 🌱</span>';
+  if (pend.length) {
+    const ver = ui.verLogros ? pend : pend.slice(0, 3);
+    h += '<span class="pequeno tenue" style="font-weight:600">Por conseguir</span><div class="lista">' + ver.map((g) => '<div class="it logro pend"><span class="emoji" aria-hidden="true">' + g.icono + '</span><span class="txt"><b>' + esc(g.titulo) + "</b><span>" + esc(g.texto) +
+      '</span><span class="barra-logro" role="img" aria-label="' + Math.round(g.progreso * 100) + ' %"><i style="width:' + Math.round(g.progreso * 100) + '%"></i></span><span>' + esc(textoProgresoLogro(g)) + "</span></span></div>").join("") + "</div>";
+  }
+  if (pend.length > 3 || hechos.length > 5) h += '<button class="btn texto" data-a="verLogros">' + (ui.verLogros ? "Ver menos" : "Ver los " + todos.length + " logros") + "</button>";
+  return h + '<span class="mini tenue">Salen de tu historial: cuentan también las sesiones pasadas, con la fecha en que los lograste.</span></section>';
+}
+/* ── Programas listos (L.PROGRAMAS / L.planPrograma): una rutina por día; nunca reemplaza ── */
+function hojaProgramas() {
+  let h = '<div class="fila entre"><h2 style="font-size:20px;font-weight:700">Empezar con un programa</h2><button class="icono" data-a="cerrarCapa" data-capa="{capa}" aria-label="Cerrar">' + ic("x") + "</button></div>" +
+    '<span class="pequeno tenue">Crea una rutina por día con ejercicios de tu lista (y del catálogo si hace falta). Antes de crear ves todo; nada de lo tuyo se reemplaza.</span>';
+  h += L.PROGRAMAS.map((p) => '<button class="opcion" data-a="verPrograma" data-p="' + p.id + '"><span class="txt"><b style="font-size:17px">' + esc(p.nombre) + " · " + p.dias + ' días</b><small class="tenue">' + esc(p.texto) +
+    "</small><small>" + esc(p.rutinas.map((r) => r.n).join(" · ")) + "</small></span>" + ic("der") + "</button>").join("");
+  return h;
+}
+function htmlVistaPrograma(plan) {
+  const rango = (r) => (r ? r[0] + (r[1] !== r[0] ? "–" + r[1] : "") + " reps" : "");
+  const p = plan.programa;
+  let h = '<p style="margin:0"><b>' + esc(p.nombre) + " · " + p.dias + " días</b> · " + plan.rutinas.length + " rutinas</p>";
+  plan.rutinas.forEach((r) => {
+    h += '<p class="prog-rut"><b>' + esc(r.nombre) + "</b>" + (r.nombre !== r.nombreOriginal ? '<br><span class="pequeno tenue">Ya tienes «' + esc(r.nombreOriginal) + "»: esta se guarda con otro nombre y la tuya no cambia.</span>" : "") + "</p>";
+    h += '<ol class="comp-lista" style="margin-top:4px">' + r.items.map((i) => {
+      const nota = i.nuevo ? "Nuevo: se agrega a tus ejercicios" : i.reactivado ? "Lo tenías retirado: vuelve a tu lista" : "";
+      return "<li><b>" + esc(i.nombre) + "</b><span>" + esc(i.series + (i.series === 1 ? " serie" : " series") + " · " + rango(i.reps)) + "</span>" + (nota ? '<span class="nota-ej">' + esc(nota) + "</span>" : "") + "</li>";
+    }).join("") + "</ol>";
+  });
+  const nuevos = plan.creados.map((e) => e.nombre);
+  if (nuevos.length) h += '<p class="pequeno" style="margin:10px 0 0">Se agregan a tus ejercicios: ' + esc(nuevos.join(", ")) + ".</p>";
+  return h + '<p class="mini tenue" style="margin:8px 0 0">Los ejercicios que ya tienes se usan con tu configuración. Cada rutina se edita o se comparte como cualquier otra.</p>';
+}
+async function verPrograma(id) {
+  cerrarHojas();
+  const plan = L.planPrograma(estado, id);
+  if (!plan) return;
+  const n = plan.rutinas.length;
+  const r = await preguntar("Vista previa", htmlVistaPrograma(plan), [{ valor: "crear", texto: "Crear " + n + " rutinas", tono: "prim" }, { valor: "no", texto: "Cancelar" }]);
+  if (r !== "crear" || !estado) return;
+  const final = L.planPrograma(estado, id, Date.now());          // con el estado de este momento
+  if (!final) { aviso("No se crearon las rutinas", "Algo no cuadró al armar el programa. Prueba otra vez."); return; }
+  if (!cambiar((d) => { d.ejercicios = final.ejercicios; d.rutinas = final.rutinasNuevas; }, true)) return;   // una sola asignación: atómico
+  toast(n + " rutinas creadas: " + final.rutinas.map((x) => x.nombre).join(", "));
+  ui.tabEj = "rutinas";
+  if (ui.vista !== "ejercicios") ir("ejercicios"); else render();
 }
 /** Gráfico SVG propio: peso top (línea) y 1RM estimado (punteada). */
 function graficoEjercicio(pts) {
@@ -3689,6 +4202,11 @@ const A = {
       if (!corrigiendo) s.terminada_en = Math.max(Date.now(), s.iniciada_en || 0);
       s.descanso = null;
     }, true);
+    /* Logros: se celebran solo los que logró ESTA sesión; los demás nuevos (historial importado, documento viejo)
+       se marcan como vistos en silencio. Nunca se repite una celebración. */
+    const lg = L.logrosParaCelebrar(estado, s.id);
+    if (lg.cambia) cambiar((d) => { const v = L.sanearVistos(d.vistos); v.logros = lg.vistos; d.vistos = v; }, true);
+    ui.celebrar = lg.celebrar.length ? { sesion: s.id, logros: lg.celebrar } : null;
     await P.guardarAhora();
     ir("resumen", { id: s.id }, true);
   },
@@ -3934,7 +4452,7 @@ const CAMBIOS = {
     const f = el.files && el.files[0]; el.value = "";
     if (!f) return;
     const r = await P.importar(f);
-    if (r.ok) { if (estado && estado.perfil) cambiar((d) => { d.perfil.bienvenida_hecha = true; }, true); capas.filter((c) => !c.resolver).forEach((c) => cerrarCapa(c.id)); Object.keys(urlsFoto).forEach(olvidarUrlFoto); toast("Respaldo restaurado" + (r.fotos ? " con " + r.fotos + " fotos" : "")); ir("inicio", {}, true); revisarCompartida(); }
+    if (r.ok) { if (estado && estado.perfil) cambiar((d) => { d.perfil.bienvenida_hecha = true; marcarLogrosVistos(d); }, true); capas.filter((c) => !c.resolver).forEach((c) => cerrarCapa(c.id)); Object.keys(urlsFoto).forEach(olvidarUrlFoto); toast("Respaldo restaurado" + (r.fotos ? " con " + r.fotos + " fotos" : "")); ir("inicio", {}, true); revisarCompartida(); }
   },
   ejGrafico(el) { ui.ejGrafico = el.value; render(); },
   async fotoFicha(el) {
@@ -4001,7 +4519,7 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "376ebaf726"; /*VERSION-APP*/
+const VERSION_APP = "a3e47cff2b"; /*VERSION-APP*/
 /* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin botón propio de
    instalar y, si se quita el ícono, se borran los datos. iPadOS se presenta como Mac: se reconoce por
    la pantalla táctil. El guardado y el respaldo son iguales que en Android. */
@@ -4326,6 +4844,16 @@ A.compartirMapa = compartirMapa;
 A.figura = accionFigura;
 A.objetivo = (el) => { const o = L.OBJETIVOS.indexOf(el.dataset.o) >= 0 ? el.dataset.o : null; cambiar((d) => { d.perfil.objetivo = o; }); };
 A.abrirRecap = abrirRecap;
+A.tuMes = (el) => abrirTuMes(el.dataset.mes);
+A.descartarMes = (el) => { descartarMes(el.dataset.mes); toast("Listo. «Tu mes» sigue en Progreso"); };
+A.verLogros = () => { ui.verLogros = !ui.verLogros; render(); };
+A.programas = () => { cerrarHojas(); abrirCapa("hoja", hojaProgramas()); };
+A.verPrograma = (el) => verPrograma(el.dataset.p);
+/** Historial importado o restaurado: todo lo ya logrado queda como visto, sin festejo masivo. */
+function marcarLogrosVistos(d) {
+  const lg = L.logrosParaCelebrar(d, null);
+  if (lg.cambia) { const v = L.sanearVistos(d.vistos); v.logros = lg.vistos; d.vistos = v; }
+}
 A.cerrarRecap = () => cerrarRecap(false);
 A.recapPaso = (el) => pasoRecap(+el.dataset.d);
 A.compartirRecap = compartirRecap;
