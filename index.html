@@ -212,6 +212,14 @@ select.entrada{appearance:auto}
 .par{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .ayuda{font-size:12px;color:var(--muted);font-weight:400}
 .error{font-size:13px;color:var(--danger);font-weight:600}
+.comp-lista{margin:10px 0 0;padding:0 0 0 22px;display:flex;flex-direction:column;gap:8px}
+.comp-lista li{display:list-item}
+.comp-lista li>b,.comp-lista li>span{display:block}
+.comp-lista li>span{font-size:13px;color:var(--muted)}
+.comp-lista li>.nota-ej{color:var(--accent);font-weight:600}
+.comp-lista li.omitido{opacity:.6}
+.comp-chk{display:flex;gap:10px;align-items:flex-start;margin-top:10px;font-size:14px;min-height:44px}
+.comp-chk input{width:22px;height:22px;flex:0 0 auto;margin-top:1px}
 .paso{display:flex;align-items:center;gap:4px;padding:3px;border-radius:12px;background:var(--track)}
 .paso button{flex:0 0 44px;width:44px;height:44px;border:0;border-radius:10px;background:var(--surface);box-shadow:var(--sombra);font-size:20px;font-weight:600;padding:0}
 .paso span{flex:1 1 auto;text-align:center;font-weight:700;font-size:18px}
@@ -1084,6 +1092,146 @@ function registrarPeso(estado, datos, hoy) {
   return { ok: true, lista: sinEse.concat([reg]), reemplazo: !!previo, registro: reg };
 }
 
+/* ── rutina compartida por enlace (#r=…) ─────────────────────────────────
+   Formato v1 (JSON compacto): { v: 1, n: nombre, e: [ejercicio…] }
+     base:   { b: base_codigo, s: series [, r: [min, max]] [, j: salto] }   (r/j solo si difieren del catálogo)
+     propio: { p: { n, g, x: secundarios, q: equipo, j: salto, r: [min, max], d: series por omisión, t: descanso_s }, s }
+   Nada personal: ni historial, ni pesos, ni peso corporal, ni nombre del usuario, ni ids, ni fotos. */
+const COMP_VERSION = 1, COMP_MAX_EJ = 30, COMP_MAX_NOMBRE = 60;
+const baseDe = (codigo) => BASE.find((b) => b[0] === codigo) || null;
+/** «Press  Inclinado» → «press inclinado» (sin tildes, mayúsculas ni espacios de más). */
+const normalNombre = (t) => String(t || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().replace(/\s+/g, " ").trim();
+const cortarNombre = (t) => String(t || "").replace(/[\u0000-\u001f\u007f]/g, " ").replace(/\s+/g, " ").trim().slice(0, COMP_MAX_NOMBRE).trim();
+/* Al compartir, sin «<» ni «>» (al recibir se rechazan: así un nombre con etiquetas delata un enlace manipulado). */
+const nombreParaCompartir = (t) => cortarNombre(String(t || "").replace(/[<>]/g, " "));
+/** Arma la carga de una rutina ({nombre, ejercicios:[{ejercicio_id, series}]}). Los ejercicios que ya no existen se omiten. */
+function cargaDeRutina(estado, rutina) {
+  const e = [];
+  for (const x of arr(rutina && rutina.ejercicios)) {
+    const ej = ejercicioPorId(estado, x.ejercicio_id);
+    if (!ej) continue;
+    const s = Math.min(10, Math.max(1, Math.round(numO(x.series, 3))));
+    const b = ej.base_codigo ? baseDe(ej.base_codigo) : null;
+    /* Dentro de los topes que valida quien recibe (reps 1–100, salto ≤ 50). */
+    const rmin = Math.min(100, Math.max(1, ej.reps_min)), rmax = Math.min(100, Math.max(rmin, ej.reps_max)), salto = Math.min(50, ej.salto > 0 ? ej.salto : 2.5);
+    if (b) {
+      const it = { b: b[0], s: s };
+      if (rmin !== b[5] || rmax !== b[6]) it.r = [rmin, rmax];
+      if (salto !== 2.5) it.j = salto;
+      e.push(it);
+    } else {
+      e.push({ p: { n: nombreParaCompartir(ej.nombre) || "Ejercicio", g: ej.grupo, x: arr(ej.secundarios).filter((g) => g !== ej.grupo), q: ej.equipo, j: salto,
+        r: [rmin, rmax], d: ej.series, t: ej.descanso_s }, s: s });
+    }
+  }
+  return { v: COMP_VERSION, n: nombreParaCompartir(rutina && rutina.nombre) || "Rutina", e: e };
+}
+/** Validación estricta de lo recibido (puede venir dañado o manipulado). → { ok, datos } | { ok:false, error } */
+function validarCarga(o) {
+  const mal = (por) => ({ ok: false, error: "danado", por: por });
+  const entero = (v, a, b) => typeof v === "number" && Number.isInteger(v) && v >= a && v <= b;
+  const nombre = (v) => typeof v === "string" && v.length <= 200 && !/[<>]/.test(v) && cortarNombre(v).length >= 1 && cortarNombre(v).length <= COMP_MAX_NOMBRE && v.trim().length <= COMP_MAX_NOMBRE;
+  const salto = (v) => typeof v === "number" && isFinite(v) && v > 0 && v <= 50;
+  const rango = (v) => Array.isArray(v) && v.length === 2 && entero(v[0], 1, 100) && entero(v[1], 1, 100) && v[0] <= v[1];
+  if (!o || typeof o !== "object" || Array.isArray(o)) return mal("no es objeto");
+  if (typeof o.v !== "number") return mal("sin versión");
+  if (o.v > COMP_VERSION) return { ok: false, error: "nueva", por: "versión " + o.v };
+  if (o.v !== COMP_VERSION) return mal("versión");
+  if (!nombre(o.n)) return mal("nombre");
+  if (!Array.isArray(o.e) || !o.e.length) return mal("sin ejercicios");
+  if (o.e.length > COMP_MAX_EJ) return mal("demasiados ejercicios");
+  const ejercicios = [];
+  for (const it of o.e) {
+    if (!it || typeof it !== "object" || Array.isArray(it)) return mal("ejercicio");
+    if (!entero(it.s, 1, 10)) return mal("series");
+    if (("b" in it) === ("p" in it)) return mal("base o propio");
+    if ("b" in it) {
+      if (typeof it.b !== "string" || !/^[a-z_]{1,30}$/.test(it.b)) return mal("base_codigo");
+      if ("r" in it && !rango(it.r)) return mal("reps base");
+      if ("j" in it && !salto(it.j)) return mal("salto base");
+      ejercicios.push({ tipo: "base", codigo: it.b, series: it.s, reps: it.r ? it.r.slice() : null, salto: "j" in it ? r2(it.j) : null });
+    } else {
+      const p = it.p;
+      if (!p || typeof p !== "object" || Array.isArray(p)) return mal("propio");
+      if (!nombre(p.n)) return mal("nombre propio");
+      if (!GRUPOS.some((g) => g.valor === p.g)) return mal("grupo");
+      if (!Array.isArray(p.x) || p.x.length > GRUPOS.length || !p.x.every((g) => GRUPOS.some((x) => x.valor === g) && g !== p.g) || new Set(p.x).size !== p.x.length) return mal("secundarios");
+      if (!EQUIPOS.some((q) => q.valor === p.q)) return mal("equipo");
+      if (!salto(p.j)) return mal("salto");
+      if (!rango(p.r)) return mal("reps");
+      if (!entero(p.d, 1, 10)) return mal("series por omisión");
+      if (!entero(p.t, 15, 600)) return mal("descanso");
+      ejercicios.push({ tipo: "propio", series: it.s, def: { nombre: cortarNombre(p.n), grupo: p.g, secundarios: p.x.slice(), equipo: p.q, salto: r2(p.j),
+        reps_min: p.r[0], reps_max: p.r[1], series: p.d, descanso_s: p.t } });
+    }
+  }
+  return { ok: true, datos: { nombre: cortarNombre(o.n), ejercicios: ejercicios } };
+}
+/** «Empuje» → «Empuje (compartida)», «Empuje (compartida 2)»… si ya existe. Nunca reemplaza una rutina. */
+function nombreRutinaLibre(estado, nombre) {
+  const usados = new Set(arr(estado && estado.rutinas).map((r) => String(r.nombre || "").trim().toLowerCase()));
+  if (!usados.has(nombre.toLowerCase())) return nombre;
+  for (let i = 1; i < 1000; i++) {
+    const suf = i === 1 ? " (compartida)" : " (compartida " + i + ")";
+    const t = nombre.slice(0, COMP_MAX_NOMBRE - suf.length).trim() + suf;
+    if (!usados.has(t.toLowerCase())) return t;
+  }
+  return nombre.slice(0, 40) + " " + nuevoId().slice(0, 8);
+}
+/** Qué pasará al agregar (para la vista previa); no toca el estado.
+    Base: por base_codigo (activo primero); si no lo tengo, por nombre del catálogo; si no, se crea desde el catálogo
+    (con el rango/salto compartido). Si existe, se usa con MI configuración. Retirado: se usa y se puede reactivar.
+    Propio: reutiliza uno propio ACTIVO con el mismo nombre (normalizado) y grupo; si no, se crea. */
+function planCompartida(estado, datos) {
+  const ejs = arr(estado && estado.ejercicios);
+  const items = [], creados = [];
+  for (const x of datos.ejercicios) {
+    if (x.tipo === "base") {
+      const b = baseDe(x.codigo);
+      const porCodigo = ejs.filter((e) => e.base_codigo === x.codigo);
+      let e = porCodigo.find((y) => y.activo) || null;
+      if (!e && b) e = ejs.find((y) => y.activo && normalNombre(y.nombre) === normalNombre(b[1]) && y.grupo === b[2]) || null;
+      if (!e) e = porCodigo[0] || null;
+      const reps = x.reps || (b ? [b[5], b[6]] : null), salto = x.salto != null ? x.salto : 2.5;
+      if (e) items.push({ accion: e.activo ? "usar" : "retirado", ejercicio_id: e.id, nombre: e.nombre, series: x.series, reps: [e.reps_min, e.reps_max],
+        compartido: reps, distinto: !!reps && (reps[0] !== e.reps_min || reps[1] !== e.reps_max) });
+      else if (b) {
+        const yaCreado = creados.find((c) => c.base_codigo === x.codigo);
+        if (yaCreado) items.push({ accion: "crear", ejercicio_id: yaCreado.id, nombre: yaCreado.nombre, series: x.series, reps: [yaCreado.reps_min, yaCreado.reps_max], repetido: true });
+        else {
+          const n = ejercicioDesdeBase(b, Date.now());
+          n.destacado = false; n.salto = salto; n.reps_min = reps[0]; n.reps_max = reps[1];
+          creados.push(n);
+          items.push({ accion: "crear", ejercicio_id: n.id, nombre: n.nombre, series: x.series, reps: reps });
+        }
+      } else items.push({ accion: "omitir", nombre: x.codigo, series: x.series, reps: x.reps });
+    } else {
+      const d = x.def, clave = normalNombre(d.nombre);
+      const e = ejs.find((y) => y.activo && !y.base_codigo && y.grupo === d.grupo && normalNombre(y.nombre) === clave) ||
+        creados.find((y) => !y.base_codigo && y.grupo === d.grupo && normalNombre(y.nombre) === clave);
+      if (e) items.push({ accion: creados.indexOf(e) >= 0 ? "crear" : "usar", propio: true, ejercicio_id: e.id, nombre: e.nombre, series: x.series, reps: [e.reps_min, e.reps_max],
+        compartido: [d.reps_min, d.reps_max], distinto: d.reps_min !== e.reps_min || d.reps_max !== e.reps_max, repetido: creados.indexOf(e) >= 0 });
+      else {
+        const n = Object.assign({ id: nuevoId(), base_codigo: null }, d, { pasos: [], destacado: false, activo: true, tiene_foto: false, creado_en: Date.now() });
+        creados.push(n);
+        items.push({ accion: "crear", propio: true, ejercicio_id: n.id, nombre: n.nombre, series: x.series, reps: [n.reps_min, n.reps_max] });
+      }
+    }
+  }
+  return { nombre: nombreRutinaLibre(estado, datos.nombre), nombreOriginal: datos.nombre, items: items, creados: creados,
+    retirados: items.filter((i) => i.accion === "retirado").map((i) => i.ejercicio_id), omitidos: items.filter((i) => i.accion === "omitir").length };
+}
+/** Arma las listas nuevas completas (ejercicios y rutinas) sin tocar el estado: quien llama las asigna de una vez. */
+function aplicarCompartida(estado, plan, op) {
+  op = op || {};
+  const reactivar = new Set(op.reactivar ? plan.retirados : []);
+  const ejercicios = arr(estado.ejercicios).map((e) => (reactivar.has(e.id) ? Object.assign({}, e, { activo: true }) : e)).concat(plan.creados);
+  const tmp = { ejercicios: ejercicios, rutinas: arr(estado.rutinas) };
+  const res = guardarRutina(tmp, { id: null, nombre: plan.nombre, ejercicios: plan.items.filter((i) => i.ejercicio_id).map((i) => ({ ejercicio_id: i.ejercicio_id, series: i.series })) }, op.ahora);
+  if (!res.ok) return res;
+  return { ok: true, ejercicios: ejercicios, rutinas: res.rutinas, id: res.id };
+}
+
 return {
   APP_ID, VERSION_ESQUEMA, GRUPOS, EQUIPOS, DESCANSOS, DIAS_CORTOS, NOMBRES_DIA, NOMBRES_MES, SERIES_MIN, SERIES_MAX, AJUSTES_OMISION, BASE,
   textoGrupo, textoEquipo, nuevoId, dosDig: dos,
@@ -1095,7 +1243,8 @@ return {
   rutinasOrdenadas, rutinaQueToca, guardarRutina, empezarSesion, sesionParaRepetir,
   constancia, volumenSemana, musculosDeSeries, nivelDia, diasConTrabajo, calendarioMes, historialEjercicio, puntosEjercicio, resumenSeries,
   resumenSesion, pesosOrdenados, promedioMovil, cambioPeso, registrarPeso, cambioDesdeInicio,
-  equivalencia, kilosEntre, perfilVacio, sanearPerfil, slugNombre, nombreArchivo, leerPesoInicial
+  equivalencia, kilosEntre, perfilVacio, sanearPerfil, slugNombre, nombreArchivo, leerPesoInicial,
+  COMP_MAX_EJ, cargaDeRutina, validarCarga, planCompartida, aplicarCompartida, nombreRutinaLibre, normalNombre
 };
 })();
 
@@ -1677,7 +1826,7 @@ const RUTAS = {
   ajustes: "M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1",
   puntos: "M5 12h.01M12 12h.01M19 12h.01", reloj: "M12 21a8 8 0 1 0 0-16 8 8 0 0 0 0 16zM12 9v4l2.5 1.5M9 2.5h6",
   camara: "M4 8h3l2-2.5h6L17 8h3v11H4zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z", repetir: "M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4",
-  archivo: "M7 3h7l5 5v13H7zM14 3v5h5"
+  archivo: "M7 3h7l5 5v13H7zM14 3v5h5", compartir: "M12 15V3M7.5 7.5L12 3l4.5 4.5M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"
 };
 function ic(n, t, grosor) {
   return '<svg width="' + (t || 20) + '" height="' + (t || 20) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + (grosor || (n === "puntos" ? 3 : 2)) +
@@ -2351,6 +2500,7 @@ function vEjercicios() {
       esc(r.ejercicios.map((x) => (L.ejercicioPorId(estado, x.ejercicio_id) || {}).nombre).filter(Boolean).join(", ")) + "</span></span>" + ic("der", 18) + "</button>").join("") + "</div>"
       : '<p class="tenue">Las rutinas son opcionales: guarda las que repites seguido. Una sesión también puede empezar repitiendo la anterior o en blanco.</p>';
     h += '<button class="btn prim ancho" data-a="editarRutina" data-id="">' + ic("plus", 18) + " Nueva rutina</button>";
+    h += '<button class="btn ancho" data-a="pegarRutina">Pegar rutina compartida</button><span class="mini tenue" style="text-align:center">¿Te enviaron una rutina? Copia el mensaje y toca «Pegar rutina compartida».</span>';
     return h + "</main>";
   }
   const activos = estado.ejercicios.filter((e) => e.activo).length, retirados = estado.ejercicios.length - activos;
@@ -2431,7 +2581,10 @@ function vRutina() {
     }).join("") + "</div>";
   }
   h += '<button class="btn punteado ancho" style="height:48px" data-a="ir" data-v="elegir" data-para="rutina">' + ic("plus", 18) + ' Agregar ejercicio</button><p class="error" id="error-rut" role="alert"></p><button class="btn prim grande" data-a="guardarRutina">Guardar rutina</button>';
-  if (!r.esNueva) h += '<button class="btn ancho" data-a="empezar" data-modo="rutina" data-r="' + esc(r.id) + '">Empezar sesión con esta rutina</button><button class="btn peligro ancho" data-a="borrarRutina">Eliminar rutina</button>';
+  if (!r.esNueva) {
+    h += '<button class="btn ancho" data-a="empezar" data-modo="rutina" data-r="' + esc(r.id) + '">Empezar sesión con esta rutina</button><button class="btn ancho" data-a="compartirRutina">' + ic("compartir", 18) + ' Compartir rutina</button><button class="btn peligro ancho" data-a="borrarRutina">Eliminar rutina</button>';
+    setTimeout(precalentarCompartir, 0);
+  }
   return h + "</main>";
 }
 function vElegir() {
@@ -2709,7 +2862,7 @@ const A = {
   async deCero() {
     if (!await confirmar("Empezar de cero", "Primero se descargará el texto crudo de la copia dañada. Después se borra del teléfono y empiezas con la lista base.", "Descargar y empezar", "peligro")) return;
     P.rescatarIlegible();
-    if (await P.empezarDeCero(L.documentoNuevo())) { ir("inicio", {}, true); } else aviso("No se pudo", "No se pudo borrar la copia dañada. Prueba importar un respaldo.");
+    if (await P.empezarDeCero(L.documentoNuevo())) { ir("inicio", {}, true); revisarCompartida(); } else aviso("No se pudo", "No se pudo borrar la copia dañada. Prueba importar un respaldo.");
   },
   mes(el) { ui.mes = L.mesSumar(ui.mes || hoy().slice(0, 7), +el.dataset.d); ui.diaSel = null; render(); },
   dia(el) { ui.diaSel = el.dataset.f; render(); },
@@ -3031,7 +3184,7 @@ function vBienvenida() {
   }
   return h + "</main>";
 }
-function terminarBienvenida() { cambiar((d) => { d.perfil.bienvenida_hecha = true; }, true); ir("inicio", {}, true); }
+function terminarBienvenida() { cambiar((d) => { d.perfil.bienvenida_hecha = true; }, true); ir("inicio", {}, true); revisarCompartida(); }
 Object.assign(A, {
   bvNombre() {
     const n = (($("#bv-nombre") || {}).value || "").trim();
@@ -3099,7 +3252,7 @@ const CAMBIOS = {
     const f = el.files && el.files[0]; el.value = "";
     if (!f) return;
     const r = await P.importar(f);
-    if (r.ok) { if (estado && estado.perfil) cambiar((d) => { d.perfil.bienvenida_hecha = true; }, true); capas.filter((c) => !c.resolver).forEach((c) => cerrarCapa(c.id)); Object.keys(urlsFoto).forEach(olvidarUrlFoto); toast("Respaldo restaurado" + (r.fotos ? " con " + r.fotos + " fotos" : "")); ir("inicio", {}, true); }
+    if (r.ok) { if (estado && estado.perfil) cambiar((d) => { d.perfil.bienvenida_hecha = true; }, true); capas.filter((c) => !c.resolver).forEach((c) => cerrarCapa(c.id)); Object.keys(urlsFoto).forEach(olvidarUrlFoto); toast("Respaldo restaurado" + (r.fotos ? " con " + r.fotos + " fotos" : "")); ir("inicio", {}, true); revisarCompartida(); }
   },
   ejGrafico(el) { ui.ejGrafico = el.value; render(); },
   async fotoFicha(el) {
@@ -3166,7 +3319,7 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "e425b0d6ce"; /*VERSION-APP*/
+const VERSION_APP = "adf63f45ff"; /*VERSION-APP*/
 /* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin botón propio de
    instalar y, si se quita el ícono, se borran los datos. iPadOS se presenta como Mac: se reconoce por
    la pantalla táctil. El guardado y el respaldo son iguales que en Android. */
@@ -3241,6 +3394,235 @@ Object.assign(A, {
   }
 });
 
+/* ═══ COMPARTIR UNA RUTINA POR ENLACE ═══
+   Enlace: ENLACE_RUTINA + carga. Carga = marca + base64url de los bytes UTF-8 del JSON de L.cargaDeRutina:
+   «z» = comprimido con deflate-raw (CompressionStream), «j» = JSON sin comprimir (navegadores sin CompressionStream).
+   Recibir: #r= al abrir (se guarda en memoria y sessionStorage y se limpia de la URL al instante) o «Pegar rutina
+   compartida». Nunca durante la bienvenida ni el Rescate: queda pendiente y se ofrece al terminar.
+   Todo lo recibido pasa por L.validarCarga; nada toca los datos hasta «Agregar a mis rutinas». */
+const ENLACE_RUTINA = "https://marcespal.github.io/rutina-app/#r=";
+const COMP_MAX_CARGA = 6000;            // caracteres de la carga al compartir (el enlace completo queda en ~6 KB como mucho)
+const COMP_MAX_LEIDA = 12000;           // al recibir, más de esto se rechaza sin decodificar
+const COMP_MAX_JSON = 64 * 1024;        // tope al descomprimir (contra «bombas» de compresión)
+const CLAVE_COMPARTIDA = "rutina-gym-v1:compartida";
+const hayCompresion = (() => { try { return typeof CompressionStream === "function" && !!new CompressionStream("deflate-raw"); } catch (e) { return false; } })();
+const hayDescompresion = (() => { try { return typeof DecompressionStream === "function" && !!new DecompressionStream("deflate-raw"); } catch (e) { return false; } })();
+function bytesABase64url(b) {
+  let bin = "";
+  for (let i = 0; i < b.length; i += 0x8000) bin += String.fromCharCode.apply(null, b.subarray(i, i + 0x8000));
+  return btoa(bin).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+}
+function base64urlABytes(t) {
+  if (!/^[A-Za-z0-9_-]+$/.test(t) || t.length % 4 === 1) throw new Error("base64url inválido");
+  const bin = atob(t.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((t.length + 3) % 4));
+  const b = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+  return b;
+}
+async function leerFlujo(flujo, max) {
+  const r = flujo.getReader(), partes = [];
+  let total = 0;
+  for (;;) {
+    const { done, value } = await r.read();
+    if (done) break;
+    total += value.length;
+    if (total > max) { r.cancel().catch(() => {}); throw new Error("demasiado grande"); }
+    partes.push(value);
+  }
+  const out = new Uint8Array(total);
+  let o = 0; for (const p of partes) { out.set(p, o); o += p.length; }
+  return out;
+}
+function pasarPor(bytes, transformador, max) {
+  const w = transformador.writable.getWriter();
+  w.write(bytes).catch(() => {}); w.close().catch(() => {});
+  return leerFlujo(transformador.readable, max);
+}
+async function codificarCarga(obj) {
+  const bytes = new TextEncoder().encode(JSON.stringify(obj));
+  if (hayCompresion) {
+    try { const z = await pasarPor(bytes, new CompressionStream("deflate-raw"), COMP_MAX_JSON * 2); if (z.length < bytes.length) return "z" + bytesABase64url(z); }
+    catch (e) { /* sin comprimir */ }
+  }
+  return "j" + bytesABase64url(bytes);
+}
+/** → { ok, obj } | { ok:false, error: "danado" | "sin-descompresion" } */
+async function decodificarCarga(carga) {
+  try {
+    if (typeof carga !== "string" || carga.length < 3 || carga.length > COMP_MAX_LEIDA) return { ok: false, error: "danado" };
+    const marca = carga[0];
+    if (marca !== "z" && marca !== "j") return { ok: false, error: "danado" };
+    let bytes = base64urlABytes(carga.slice(1));
+    if (marca === "z") {
+      if (!hayDescompresion) return { ok: false, error: "sin-descompresion" };
+      bytes = await pasarPor(bytes, new DecompressionStream("deflate-raw"), COMP_MAX_JSON);
+    } else if (bytes.length > COMP_MAX_JSON) return { ok: false, error: "danado" };
+    const texto = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    return { ok: true, obj: JSON.parse(texto) };
+  } catch (e) { return { ok: false, error: "danado" }; }
+}
+/** Acepta el mensaje completo, solo el enlace o solo la carga. */
+function extraerCarga(texto) {
+  const t = String(texto || "").slice(0, 40000);
+  const m = /[#&?]r=([A-Za-z0-9_-]+)/.exec(t);
+  if (m) return m[1];
+  const s = t.trim();
+  return /^[zj][A-Za-z0-9_-]{8,}$/.test(s) ? s : null;
+}
+/* Al compartir hace falta el gesto del usuario (Safari lo exige): la carga se prepara al abrir la rutina. */
+const cacheCarga = new Map();
+function rutinaParaCompartir() {
+  const r = ui.rutina;
+  return r ? { nombre: r.nombre, ejercicios: r.ejercicios } : null;
+}
+async function cargaDe(obj) {
+  const k = JSON.stringify(obj);
+  if (cacheCarga.has(k)) return cacheCarga.get(k);
+  const c = await codificarCarga(obj);
+  if (cacheCarga.size > 20) cacheCarga.clear();
+  cacheCarga.set(k, c);
+  return c;
+}
+function precalentarCompartir() {
+  if (!estado || ui.vista !== "rutina" || !ui.rutina || ui.rutina.esNueva) return;
+  const obj = L.cargaDeRutina(estado, rutinaParaCompartir());
+  if (obj.e.length && obj.e.length <= L.COMP_MAX_EJ) cargaDe(obj).catch(() => {});
+}
+function mensajeCompartir(obj, carga) {
+  const n = obj.e.length;
+  return "Te comparto mi rutina «" + obj.n + "» (" + n + (n === 1 ? " ejercicio" : " ejercicios") + ") para la app Rutina:\n" + ENLACE_RUTINA + carga +
+    "\n\nSi usas iPhone o el enlace no abre la app: copia este mensaje y en Rutina toca Rutinas → «Pegar rutina compartida».";
+}
+function capaCopiar(texto) {
+  aviso("Copia este mensaje", "Mantén presionado el texto, selecciónalo todo, cópialo y envíalo." +
+    '<textarea class="entrada" readonly style="width:100%;min-height:200px;margin-top:10px;font:13px/1.4 ui-monospace,monospace">' + esc(texto) + "</textarea>");
+}
+/** Menú de compartir del teléfono → si no hay, copiar → si tampoco, mostrar para copiar a mano. Cerrar el menú no es error. */
+async function compartirTexto(texto) {
+  if (navigator.share) {
+    try { await navigator.share({ text: texto }); return "compartido"; }
+    catch (e) { if (e && e.name === "AbortError") return "cancelado"; /* sigue con copiar */ }
+  }
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) { await navigator.clipboard.writeText(texto); toast("Mensaje copiado: pégalo en el chat"); return "copiado"; }
+  } catch (e) { /* a mano */ }
+  capaCopiar(texto);
+  return "a-mano";
+}
+/* Vista previa (todo texto recibido pasa por esc). */
+function htmlVistaPrevia(plan) {
+  const rango = (r) => (r ? r[0] + (r[1] !== r[0] ? "–" + r[1] : "") + " reps" : "");
+  const n = plan.items.filter((i) => i.ejercicio_id).length;
+  let h = '<p style="margin:0"><b>«' + esc(plan.nombreOriginal) + "»</b> · " + n + (n === 1 ? " ejercicio" : " ejercicios") + "</p>";
+  if (plan.nombre !== plan.nombreOriginal) h += '<p class="pequeno tenue" style="margin:4px 0 0">Ya tienes una rutina con ese nombre: se guardará como «' + esc(plan.nombre) + "». La tuya no cambia.</p>";
+  h += '<ol class="comp-lista">' + plan.items.map((i) => {
+    let nota = "";
+    if (i.accion === "omitir") nota = "No está en tu versión de la app: se omite";
+    else if (i.accion === "retirado") nota = "Lo tienes retirado";
+    else if (i.accion === "crear" && !i.repetido) nota = "Nuevo: se crea en tus ejercicios";
+    if (i.distinto) nota += (nota ? " · " : "") + "Se usa tu rango; quien comparte usa " + rango(i.compartido);
+    return '<li class="' + (i.accion === "omitir" ? "omitido" : "") + '"><b>' + esc(i.nombre) + "</b><span>" + esc(i.series + (i.series === 1 ? " serie" : " series") + (i.reps ? " · " + rango(i.reps) : "")) + "</span>" +
+      (nota ? '<span class="nota-ej">' + esc(nota) + "</span>" : "") + "</li>";
+  }).join("") + "</ol>";
+  const nuevos = plan.creados.map((e) => e.nombre);
+  if (nuevos.length) h += '<p class="pequeno" style="margin:8px 0 0">Se crearán en tus ejercicios: ' + esc(nuevos.join(", ")) + ".</p>";
+  if (plan.retirados.length) h += '<label class="comp-chk"><input type="checkbox" data-c="compReactivar"> <span>Volver a activar los que tienes retirados. Si no, quedan en la rutina pero no entran en tus sesiones.</span></label>';
+  if (plan.omitidos) h += '<p class="pequeno tenue" style="margin:8px 0 0">Actualiza Rutina para tener todos los ejercicios del catálogo.</p>';
+  return h + '<p class="mini tenue" style="margin:8px 0 0">Solo trae la rutina: nada de historial ni pesos de quien la comparte.</p>';
+}
+const MSJ_DANADO = "El enlace de la rutina está incompleto o dañado. Pide que te lo envíen de nuevo.";
+let recibiendo = false;
+async function recibirCarga(carga) {
+  if (recibiendo || !estado) return;
+  recibiendo = true;
+  try {
+    const d = await decodificarCarga(carga);
+    if (!d.ok) {
+      if (d.error === "sin-descompresion") { aviso("No se pudo abrir la rutina", "Este navegador es antiguo y no puede leer el enlace. Actualízalo e inténtalo de nuevo."); return; }
+      aviso("No se pudo abrir la rutina", MSJ_DANADO); return;
+    }
+    const v = L.validarCarga(d.obj);
+    if (!v.ok) {
+      if (v.error === "nueva") { aviso("Actualiza Rutina", "Esta rutina se compartió desde una versión más nueva de la app. Actualízala e inténtalo de nuevo."); return; }
+      aviso("No se pudo abrir la rutina", MSJ_DANADO); return;
+    }
+    let plan = L.planCompartida(estado, v.datos);
+    if (!plan.items.some((i) => i.ejercicio_id)) { aviso("No se pudo agregar la rutina", "Ninguno de sus ejercicios está en tu versión de la app. Actualiza Rutina e inténtalo de nuevo."); return; }
+    ui.compReactivar = false;
+    const r = await preguntar("Rutina compartida", htmlVistaPrevia(plan), [{ valor: "agregar", texto: "Agregar a mis rutinas", tono: "prim" }, { valor: "no", texto: "Cancelar" }]);
+    if (r !== "agregar" || !estado) return;
+    plan = L.planCompartida(estado, v.datos);          // con el estado de este momento
+    const res = L.aplicarCompartida(estado, plan, { reactivar: !!ui.compReactivar, ahora: Date.now() });
+    if (!res.ok) { aviso("No se agregó la rutina", esc(res.error)); return; }
+    if (!cambiar((doc) => { doc.ejercicios = res.ejercicios; doc.rutinas = res.rutinas; }, true)) return;   // una sola asignación: atómico
+    toast("Rutina «" + plan.nombre + "» agregada");
+    if (ui.vista === "sesion") render();
+    else {                                              // a la rutina; «atrás» vuelve a la lista de Rutinas
+      ui.tabEj = "rutinas";
+      if (ui.vista !== "ejercicios") ir("ejercicios");
+      A.editarRutina({ dataset: { id: res.id } });
+    }
+  } finally { recibiendo = false; }
+}
+/* Pendiente del enlace #r= (memoria + sessionStorage, por si recarga durante la bienvenida). */
+let compartidaPendiente = null;
+function tomarEnlace() {
+  if (DEMO) return;
+  let h = "";
+  try { h = location.hash || ""; } catch (e) { h = ""; }
+  const m = /^#(?:.*&)?r=([^&]*)/.exec(h);
+  if (m) {
+    compartidaPendiente = m[1].slice(0, COMP_MAX_LEIDA + 1);
+    try { sessionStorage.setItem(CLAVE_COMPARTIDA, compartidaPendiente); } catch (e) { /* queda en memoria */ }
+    try { history.replaceState(history.state, "", location.pathname + location.search); } catch (e) { /* algunos orígenes no permiten historial */ }
+  } else if (!compartidaPendiente) {
+    try { compartidaPendiente = sessionStorage.getItem(CLAVE_COMPARTIDA); } catch (e) { compartidaPendiente = null; }
+  }
+}
+/** Ofrece la rutina pendiente solo con los datos cargados y fuera de la bienvenida y el Rescate. */
+function revisarCompartida() {
+  if (!compartidaPendiente || DEMO || !estado || ui.vista === "bienvenida" || ui.vista === "rescate" || P.soloLectura()) return;
+  const c = compartidaPendiente;
+  compartidaPendiente = null;
+  try { sessionStorage.removeItem(CLAVE_COMPARTIDA); } catch (e) {}
+  recibirCarga(c).catch((e) => { console.error(e); aviso("No se pudo abrir la rutina", MSJ_DANADO); });
+}
+window.addEventListener("hashchange", () => { tomarEnlace(); revisarCompartida(); });
+function abrirPegar(mensaje) {
+  abrirCapa("dialogo", '<h2>Pegar rutina compartida</h2><div class="cuerpo">' + esc(mensaje) +
+    '<textarea class="entrada" id="pegar-texto" style="width:100%;min-height:140px;margin-top:10px" placeholder="Te comparto mi rutina…"></textarea><p class="error" id="pegar-error" role="alert"></p></div>' +
+    '<div class="botones"><button class="btn ancho prim" data-a="pegarRevisar" data-capa="{capa}">Revisar</button><button class="btn ancho" data-a="cerrarCapa" data-capa="{capa}">Cancelar</button></div>');
+  setTimeout(() => { const t = $("#pegar-texto"); if (t) { try { t.focus(); } catch (e) {} } }, 50);
+}
+Object.assign(A, {
+  async compartirRutina() {
+    const rut = rutinaParaCompartir();
+    if (!rut || !estado) return;
+    const obj = L.cargaDeRutina(estado, rut);
+    if (!obj.e.length) { toast("Agrega al menos un ejercicio"); return; }
+    if (obj.e.length > L.COMP_MAX_EJ) { aviso("No cabe en un enlace", "Esta rutina tiene " + obj.e.length + " ejercicios; por enlace se comparten hasta " + L.COMP_MAX_EJ + ". Divídela en dos rutinas."); return; }
+    const carga = await cargaDe(obj);
+    if (carga.length > COMP_MAX_CARGA) { aviso("No cabe en un enlace", "Esta rutina es demasiado grande para compartirla por enlace. Prueba con nombres más cortos o divídela en dos."); return; }
+    await compartirTexto(mensajeCompartir(obj, carga));
+  },
+  async pegarRutina() {
+    let texto = null;
+    try { if (navigator.clipboard && navigator.clipboard.readText) texto = await navigator.clipboard.readText(); } catch (e) { texto = null; }
+    const carga = texto ? extraerCarga(texto) : null;
+    if (carga) { await recibirCarga(carga); return; }
+    abrirPegar(texto && texto.trim() ? "No encontré una rutina en lo que tienes copiado. Pega aquí el mensaje o el enlace que te enviaron:" : "Pega aquí el mensaje o el enlace que te enviaron:");
+  },
+  async pegarRevisar(el) {
+    const t = ($("#pegar-texto") || {}).value || "";
+    const carga = extraerCarga(t);
+    if (!carga) { const e = $("#pegar-error"); if (e) e.textContent = "No encontré una rutina compartida en ese texto. Copia el mensaje completo o el enlace."; return; }
+    cerrarCapa(el.dataset.capa, null);
+    await recibirCarga(carga);
+  }
+});
+CAMBIOS.compReactivar = (el) => { ui.compReactivar = !!el.checked; };
+tomarEnlace();
+
 /* ═══ ARRANQUE ═══ */
 async function pedirPersistencia() {
   try {
@@ -3280,6 +3662,7 @@ async function arrancar(robar) {
   if (darBienvenida) { ui.paso = 1; ir("bienvenida", {}, true); }
   else if (enCurso && ui.vista !== "rescate") ir("sesion", { id: enCurso.id }); else render(true);
   avisoMigracion();
+  revisarCompartida();
   await pedirPersistencia();
 }
 /* Una sola vez para quien tenía un .json conectado (versiones hasta 2026-11-22): el vínculo ya se
