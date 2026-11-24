@@ -4519,7 +4519,7 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "b7a7fa25d1"; /*VERSION-APP*/
+const VERSION_APP = "134ad1a647"; /*VERSION-APP*/
 /* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin botón propio de
    instalar y, si se quita el ícono, se borran los datos. iPadOS se presenta como Mac: se reconoce por
    la pantalla táctil. El guardado y el respaldo son iguales que en Android. */
@@ -4533,7 +4533,7 @@ const PWA = {
 };
 /* ═══ CONTEO ANÓNIMO DE USO ═══
    Como mucho una llamada al día por teléfono, solo en la app publicada y con internet. No viaja ningún
-   identificador ni dato del usuario: versión, android/iphone/otro y tres marcas (primera vez de la semana,
+   dato del usuario: un identificador aleatorio de la instalación, versión, android/iphone/otro y tres marcas (primera vez de la semana,
    del mes, instalación nueva). Receptor: apps-script/contador.gs (Google Apps Script → Hoja). Si falla, se
    reintenta otro día; nunca toca los datos ni bloquea la app. */
 const CONTEO_URL = "https://script.google.com/macros/s/AKfycby9gspjyLMG5LTefNtx5j1CkZM_t_gmSa0UXxR70ABkaKV7tfhwMMpdVe900KwQhAwN/exec";
@@ -4550,11 +4550,14 @@ function contarUso() {
     const d = new Date(); d.setDate(d.getDate() - ((d.getDay() + 6) % 7));
     const semana = L.fechaLocal(d), mes = dia.slice(0, 7);
     const so = ES_IOS ? "iphone" : /Android/i.test(navigator.userAgent) ? "android" : "otro";
-    const q = "?v=" + encodeURIComponent(VERSION_APP) + "&so=" + so + "&s=" + (prev.semana !== semana ? 1 : 0) +
+    /* Identificador aleatorio de esta instalación (no es el del teléfono ni dice nada de la persona). */
+    let id = /^[0-9a-f]{16}$/.test(prev.id || "") ? prev.id : "";
+    if (!id) { const b = new Uint8Array(8); crypto.getRandomValues(b); id = Array.from(b, (x) => x.toString(16).padStart(2, "0")).join(""); }
+    const q = "?v=" + encodeURIComponent(VERSION_APP) + "&so=" + so + "&id=" + id + "&s=" + (prev.semana !== semana ? 1 : 0) +
       "&m=" + (prev.mes !== mes ? 1 : 0) + "&n=" + (prev.dia ? 0 : 1);
     conteoEnCurso = true;
     fetch(CONTEO_URL + q, { mode: "no-cors", cache: "no-store", credentials: "omit", keepalive: true })
-      .then(() => { try { localStorage.setItem(CONTEO_CLAVE, JSON.stringify({ dia, semana, mes })); } catch (e) {} })
+      .then(() => { try { localStorage.setItem(CONTEO_CLAVE, JSON.stringify({ dia, semana, mes, id })); } catch (e) {} })
       .catch(() => {})
       .finally(() => { conteoEnCurso = false; });
   } catch (e) { conteoEnCurso = false; }
