@@ -1,7 +1,7 @@
-Rutina · licencias de terceros
+Setra · licencias de terceros
 
 El mapa muscular usa los dibujos de «react-native-body-highlighter» 3.2.0
-(https://github.com/HichamELBSI/react-native-body-highlighter), agrupados y adaptados para Rutina.
+(https://github.com/HichamELBSI/react-native-body-highlighter), agrupados y adaptados para Setra.
 
 MIT License
 
