@@ -11,7 +11,7 @@
 // nuevo se instala y ESPERA; la app muestra «Hay una versión nueva» y solo
 // cuando el usuario toca «Actualizar» le pide que tome el control.
 
-const VERSION = "b5741c46a8";
+const VERSION = "5f564de837";
 const CACHE = "rutina-app-" + VERSION;
 const ARCHIVOS = ["./", "index.html", "manifest.webmanifest", "icono-192.png", "icono-512.png", "icono-maskable-512.png", "icono.svg", "icono-apple.png"];
 
