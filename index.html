@@ -348,6 +348,7 @@ svg.graf text{fill:var(--muted);font-size:10px;font-family:inherit}
 /* capas */
 .velo{position:fixed;inset:0;background:var(--velo);display:flex;flex-direction:column;justify-content:flex-end;z-index:50}
 .velo.centro{justify-content:center;padding:16px}
+.hoja>*{flex-shrink:0}
 .hoja{background:var(--bg);border-radius:22px 22px 0 0;padding:8px 16px calc(20px + env(safe-area-inset-bottom));display:flex;flex-direction:column;gap:10px;max-height:88vh;overflow-y:auto;max-width:560px;width:100%;margin:0 auto}
 .hoja .asa{align-self:center;width:36px;height:4px;border-radius:2px;background:var(--line)}
 .dialogo{background:var(--bg);border-radius:20px;padding:18px 16px 14px;display:flex;flex-direction:column;gap:10px;max-width:440px;width:100%;margin:0 auto;max-height:86vh;overflow-y:auto}
@@ -3001,7 +3002,7 @@ function vInicio() {
   let h = '<main class="vista"><header class="cab"><div class="t"><span class="fecha">' + esc(L.mayuscula(L.fechaLarga(f))) + "</span>" + tituloCab(nom ? "Hola, " + esc(nom.split(" ")[0]) : "SETRA") + "</div>" + pildora() + "</header>";
   h += tarjetaHoy(enCurso, activos);        // «Hoy toca …» + Entrenar, justo bajo el saludo (visible sin scroll a 360×740)
   h += avisosPwa() + avisosInicio(c);
-  if (!DEMO && enRecapInicio(f)) h += tarjetaRecap(true);      // del 1 de diciembre al 15 de enero
+  if (!DEMO && enRecapInicio(f)) h += tarjetaRecap(true);      // del 15 de diciembre al 15 de enero
   // Días sin entrenar + última sesión (mismo cálculo que el aviso)
   h += '<section class="tarjeta dias" aria-label="Días sin entrenar"><div class="col" style="gap:0;flex:0 0 auto"><span class="pequeno tenue" style="font-weight:600">Días sin entrenar</span><span class="grande num">' +
     (c.ultimaFecha ? c.diasSinEntrenar : "—") + '</span></div><div class="sep">';
@@ -3055,7 +3056,12 @@ function tarjetaHoy(enCurso, activos) {
 /** El Recap del año se ofrece en Inicio del 1 de diciembre al 15 de enero (como L.anioRecap). */
 function enRecapInicio(f) {
   const p = L.partesFecha(f);
-  return !!p && (p.m === 12 || (p.m === 1 && p.d <= 15));
+  return !!p && ((p.m === 12 && p.d >= 15) || (p.m === 1 && p.d <= 15));
+}
+/** Progreso: el Recap aparece desde el 15 de diciembre y se queda todo enero (antes, solo el enlace de Ajustes). */
+function enRecapProgreso(f) {
+  const p = L.partesFecha(f);
+  return !!p && ((p.m === 12 && p.d >= 15) || p.m === 1);
 }
 /** Sesiones del año del Recap que cuentan (con series de trabajo), igual que L.recapDelAnio. */
 function sesionesRecap(f) {
@@ -4430,7 +4436,7 @@ function vProgreso() {
   const rango = L.fechaCorta(lunes) + " – " + L.fechaCorta(fin);
   let h = '<main class="vista"><header class="cab"><div class="t">' + tituloCab("Progreso") + '</div>' + pildora() + "</header>";
   h += logrosFila();
-  h += tarjetaRecap(false);
+  if (enRecapProgreso(f)) h += tarjetaRecap(false);
   /* Semana | Mes: una sola tarjeta de kilos (antes salían las dos, a veces con el mismo valor) */
   const mes = ui.periodo === "mes";
   h += '<div class="pestanas" role="tablist" aria-label="Periodo de los kilos"><button role="tab" data-a="periodo" data-p="semana" aria-selected="' + !mes + '">Semana</button><button role="tab" data-a="periodo" data-p="mes" aria-selected="' + mes + '">Mes</button></div>';
@@ -5400,7 +5406,7 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "7e8eaca0f3"; /*VERSION-APP*/
+const VERSION_APP = "b5741c46a8"; /*VERSION-APP*/
 /* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin botón propio de
    instalar y, si se quita el ícono, se borran los datos. iPadOS se presenta como Mac: se reconoce por
    la pantalla táctil. El guardado y el respaldo son iguales que en Android. */
