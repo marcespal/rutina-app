@@ -18,7 +18,7 @@ if (/^https?:$/.test(location.protocol)) {
 }
 </script>
 <!--
-  Setra (antes «Rutina») · Workout Routine Tracker: registro de gimnasio en un solo archivo HTML.
+  Setra (antes «Rutina») · Tu progreso, serie a serie: registro de gimnasio en un solo archivo HTML.
   Sin dependencias, sin internet. Todo vive en este teléfono (IndexedDB); el
   respaldo .json lo guarda el usuario («Guardar respaldo»). Copia local de la sección «Gym».
 -->
@@ -316,6 +316,14 @@ svg.graf text{fill:var(--muted);font-size:10px;font-family:inherit}
 .logo-setra{display:flex;flex-direction:column;align-items:center;gap:8px;color:var(--ink)}
 .logo-setra svg{display:block}
 .logo-setra .lema{font-size:11px;font-weight:600;letter-spacing:.22em;color:var(--muted);text-align:center}
+/* Pantalla de inicio (azul noche de la marca en los dos temas) */
+#arranque{position:fixed;inset:0;z-index:90;background:#0B111D;display:flex;align-items:center;justify-content:center;transition:opacity .4s ease}
+#arranque.fuera{opacity:0;pointer-events:none}
+#arranque .logo-setra{color:#F6F8FC;gap:12px;animation:arr-entra .7s cubic-bezier(.2,.7,.2,1) both}
+#arranque .logo-setra .lema{color:#AEB9C9;animation:arr-lema .9s ease both}
+@keyframes arr-entra{from{opacity:0;transform:translateY(8px) scale(.96)}to{opacity:1;transform:none}}
+@keyframes arr-lema{0%,40%{opacity:0}to{opacity:1}}
+@media (prefers-reduced-motion: reduce){#arranque{transition-duration:.01s}#arranque .logo-setra,#arranque .logo-setra .lema{animation:none}}
 .btn.recap-enlace{align-self:center;font-size:12px;font-weight:500;color:var(--muted);margin-top:6px}
 .recap{position:fixed;inset:0;z-index:55;background:#0B1418;color:#FFFFFF;display:flex;flex-direction:column;align-items:center;
   padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom);-webkit-user-select:none;user-select:none}
@@ -335,6 +343,126 @@ svg.graf text{fill:var(--muted);font-size:10px;font-family:inherit}
 </style>
 </head>
 <body>
+<!-- Pantalla de inicio: el fondo es CSS estático; el script que sigue pinta el logo antes de que se cargue la app.
+     Se va con quitarArranque() (mín. ~700 ms) o sola a los 2 s, o al instante si hay un error. No sale en las demos. -->
+<div id="arranque" aria-hidden="true"><div class="arr-logo"></div></div>
+<script>
+/* ── Marca Setra ──────────────────────────────────────────────────────────
+   Va en su propio script, antes de la app, para que la pantalla de inicio la pinte desde el primer cuadro.
+   Logo fuente: marca/setra_logo1.svg. Aquí va su símbolo tal cual (23 piezas: facetas y filos de luz, más el
+   brillo cian de fondo) y la palabra «SETRA» con los trazos del logo. El lema va en la letra del sistema. */
+const MARCA_GRAD = {   // [x1, y1, x2, y2] relativos a la caja de la faceta, como en el SVG
+  top: [[0, 1, 1, 0], [[0, "#103d5b"], [0.38, "#12d9d0"], [0.72, "#19c9c6"], [1, "#4775e9"]]],
+  cyan: [[0, 0, 1, 1], [[0, "#16eee0"], [0.5, "#10bfc9"], [1, "#244b91"]]],
+  blue: [[0, 0, 1, 1], [[0, "#16466a"], [0.5, "#168baf"], [1, "#625de0"]]],
+  violet: [[0, 0, 1, 1], [[0, "#1c3d70"], [0.55, "#2877a9"], [1, "#7969ec"]]],
+  lower: [[0, 0, 1, 0], [[0, "#11d9dc"], [0.52, "#148cae"], [1, "#414d9d"]]]
+};
+// [puntos, relleno (degradado o color), opacidad, grosor]; con grosor es un filo de luz (trazo abierto, unión redonda).
+// En el orden del SVG; caja de las facetas: x 153–498, y 28–456.
+const MARCA_PIEZAS = [
+  [[166, 155, 498, 28, 452, 119, 241, 198], "top", 1], [[166, 155, 498, 28, 248, 173], "#16d7cf", 0.62],     // hoja de arriba
+  [[248, 173, 498, 28, 452, 119, 241, 198], "#245a9a", 0.52], [[166, 155, 248, 173, 241, 198], "#0b3956", 0.8],
+  [[248, 173, 498, 28, 452, 119], "#35e8d9", 0.32], [[166, 155, 498, 28], "#45fff0", 0.72, 2.2],
+  [[166, 155, 294, 305, 359, 281, 241, 198], "blue", 1], [[166, 155, 166, 234, 294, 305], "cyan", 1],         // pliegue izquierdo
+  [[166, 155, 241, 198, 294, 305], "#20d6d0", 0.62], [[166, 234, 241, 198, 294, 305], "#087b9c", 0.52],
+  [[241, 198, 359, 281, 294, 305], "#182d57", 0.82], [[166, 155, 166, 234, 294, 305], "#29f2e6", 0.8, 1.8],
+  [[294, 196, 359, 181, 484, 247, 484, 329], "violet", 1], [[294, 196, 359, 181, 484, 247, 402, 257], "#1c4f78", 0.85], // hoja central
+  [[359, 181, 484, 247, 484, 329], "#5369d2", 0.75], [[402, 257, 484, 329, 484, 247], "#7769e8", 0.58],
+  [[294, 196, 402, 257, 484, 329], "#20d8d6", 0.48, 2],
+  [[153, 456, 198, 365, 484, 247, 414, 319], "lower", 1], [[153, 456, 198, 365, 414, 319], "#16c9d5", 0.55],  // hoja de abajo
+  [[198, 365, 484, 247, 414, 319], "#287bb1", 0.64], [[153, 456, 414, 319, 484, 329], "#173b75", 0.4],
+  [[153, 456, 198, 365, 484, 247], "#24e9e5", 0.72, 2.2], [[198, 365, 414, 319], "#57f4e7", 0.65, 1.6]
+];
+// Brillo de fondo: estas dos manchas desenfocadas (σ 7) en cian al 42 % × 0,8 (#27E1F9 en sRGB; el filtro SVG va en linearRGB).
+const MARCA_AURA = ["M166 155L498 28L452 119L241 198L359 281L294 305L166 234Z", "M153 456L241 363L484 247L484 329L300 412Z"];
+const MARCA_CAJA = [131, 6, 389, 472];   // viewBox del símbolo: caja de las facetas + 22 de margen para el brillo
+// «SETRA» en bloques rellenos: barras de 19 con ranuras de 3, montantes de 21, esquinas exteriores r 11 (S y R).
+const MARCA_S = "M93 532H164V551H103V554H153Q164 554 164 565V583Q164 594 153 594H82V575H143V572H93Q82 572 82 561V543Q82 532 93 532Z";
+const MARCA_LETRAS = "M182 532H266V551H203V554H256V572H203V575H266V594H182ZM282 532H371V551H337V594H316V551H282Z" +
+  "M387 532H469Q480 532 480 543V563Q480 574 469 574H461L485 594H458L435 574H408V594H387ZM408 551V557H458V551Z" +
+  "M497 594L522 532H548L575 594H552L547 580H521L516 594ZM528 563H541L535 546Z";                // todo se rellena (evenodd)
+let marcaN = 0;
+/** Símbolo en SVG; `alto` es el alto de las facetas (el SVG queda un poco más grande por el margen del brillo). */
+function svgSimbolo(alto) {
+  const id = "sx" + (++marcaN) + "-", esc = alto / 428;
+  let defs = '<filter id="' + id + 'glow" x="-40%" y="-40%" width="180%" height="180%"><feGaussianBlur stdDeviation="7" result="blur"/>' +
+    '<feColorMatrix in="blur" type="matrix" values="0 0 0 0 0.02  0 0 0 0 0.75  0 0 0 0 0.95  0 0 0 .42 0"/></filter>';
+  for (const k in MARCA_GRAD) {
+    const [v, paradas] = MARCA_GRAD[k];
+    defs += '<linearGradient id="' + id + k + '" x1="' + v[0] + '" y1="' + v[1] + '" x2="' + v[2] + '" y2="' + v[3] + '">' +
+      paradas.map((s) => '<stop offset="' + s[0] + '" stop-color="' + s[1] + '"/>').join("") + "</linearGradient>";
+  }
+  const caras = MARCA_PIEZAS.map(([pt, f, o, g]) => '<path d="M' + pt.join(" ") + (g ? '" fill="none" stroke="' + f + '" stroke-width="' + g + '"' :
+    'Z" fill="' + (MARCA_GRAD[f] ? "url(#" + id + f + ")" : f) + '"') + (o < 1 ? ' opacity="' + o + '"' : "") + "/>").join("");
+  return '<svg width="' + Math.round(MARCA_CAJA[2] * esc) + '" height="' + Math.round(MARCA_CAJA[3] * esc) + '" viewBox="' + MARCA_CAJA.join(" ") +
+    '" aria-hidden="true"><defs>' + defs + "</defs>" + '<g filter="url(#' + id + 'glow)" opacity=".8"><path d="' + MARCA_AURA[0] +
+    '" fill="#11d9df"/><path d="' + MARCA_AURA[1] + '" fill="#1679db"/></g><g stroke-linejoin="round">' + caras + "</g></svg>";
+}
+function svgPalabra(alto) {
+  return '<svg width="' + Math.round(alto * 496 / 64) + '" height="' + alto + '" viewBox="80 531 496 64" aria-hidden="true"><path d="' + MARCA_S + MARCA_LETRAS +
+    '" fill="currentColor" fill-rule="evenodd"/></svg>';
+}
+/** Logo con lema: símbolo arriba, «SETRA» y «TU PROGRESO, SERIE A SERIE». */
+function logoSetra(alto) {
+  alto = alto || 96;
+  return '<div class="logo-setra" role="img" aria-label="Setra · Tu progreso, serie a serie">' + svgSimbolo(alto) + svgPalabra(Math.round(alto * 0.27)) +
+    '<span class="lema" aria-hidden="true">TU PROGRESO, SERIE A SERIE</span></div>';
+}
+/** Marca pequeña en las imágenes: símbolo + «SETRA». (x, yCentro) y alinear "left" | "right". */
+function marcaCanvas(c, x, yCentro, alto, alinear, color) {
+  const kS = alto / 428, altoP = alto * 0.46, kP = altoP / 64, anchoS = 345 * kS, sep = alto * 0.22, anchoP = 496 * kP;
+  const x0 = alinear === "right" ? x - anchoS - sep - anchoP : x;
+  const alfa = c.globalAlpha;
+  c.save();
+  c.translate(x0, yCentro - alto / 2); c.scale(kS, kS); c.translate(-153, -28);
+  // Brillo: solo la sombra desenfocada de las manchas (se dibujan muy lejos y la sombra vuelve a su lugar).
+  const m = c.getTransform(), lejos = 1e5;
+  c.save();
+  c.shadowColor = "rgba(39,225,249,0.336)"; c.shadowBlur = 14 * Math.hypot(m.a, m.b);   // shadowBlur = 2σ, en píxeles del lienzo
+  c.shadowOffsetX = -lejos * m.a; c.shadowOffsetY = -lejos * m.b;
+  c.translate(lejos, 0); c.fillStyle = "#000"; c.fill(new Path2D(MARCA_AURA.join("")));
+  c.restore();
+  c.lineJoin = "round";
+  for (const [pt, f, o, g] of MARCA_PIEZAS) {
+    const ruta = new Path2D("M" + pt.join(" ") + (g ? "" : "Z"));
+    let relleno = f;
+    if (MARCA_GRAD[f]) {
+      const xs = pt.filter((_, i) => i % 2 === 0), ys = pt.filter((_, i) => i % 2 === 1);
+      const x1 = Math.min(...xs), y1 = Math.min(...ys), w = Math.max(...xs) - x1, h = Math.max(...ys) - y1, [v, paradas] = MARCA_GRAD[f];
+      relleno = c.createLinearGradient(x1 + v[0] * w, y1 + v[1] * h, x1 + v[2] * w, y1 + v[3] * h);
+      for (const s of paradas) relleno.addColorStop(s[0], s[1]);
+    }
+    c.globalAlpha = alfa * o;
+    if (g) { c.strokeStyle = relleno; c.lineWidth = g; c.stroke(ruta); } else { c.fillStyle = relleno; c.fill(ruta); }
+  }
+  c.restore(); c.save();
+  c.translate(x0 + anchoS + sep, yCentro - altoP / 2); c.scale(kP, kP); c.translate(-80, -531);
+  c.fillStyle = color || "#FFFFFF";
+  c.fill(new Path2D(MARCA_S + MARCA_LETRAS), "evenodd");
+  c.restore();
+}
+/* Pantalla de inicio: solo al abrir (es HTML de la carga; al volver de segundo plano ya no existe). */
+(function () {
+  const a = document.getElementById("arranque");
+  const cfg = window.RUTINA_CONFIG;
+  if (cfg && typeof cfg === "object" && cfg.demo === true) { a.remove(); window.quitarArranque = function () {}; return; }
+  a.firstChild.innerHTML = logoSetra(124);
+  const t0 = Date.now();
+  let hecho = false;
+  window.quitarArranque = function (ya) {
+    if (hecho) return;
+    hecho = true;
+    setTimeout(function () {
+      a.classList.add("fuera");
+      setTimeout(function () { a.remove(); }, 450);
+    }, ya ? 0 : Math.max(0, 700 - (Date.now() - t0)));
+  };
+  setTimeout(function () { window.quitarArranque(true); }, 2000);          // tope: aunque algo tarde
+  window.addEventListener("error", function () { window.quitarArranque(true); });
+  window.addEventListener("unhandledrejection", function () { window.quitarArranque(true); });
+})();
+</script>
 <div id="app" aria-live="off"></div>
 <div id="capas"></div>
 <noscript>Esta app necesita JavaScript.</noscript>
@@ -2536,73 +2664,7 @@ const RUTAS = {
   camara: "M4 8h3l2-2.5h6L17 8h3v11H4zM12 17a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7z", repetir: "M4 12a8 8 0 1 0 2.3-5.7M4 4v4h4",
   archivo: "M7 3h7l5 5v13H7zM14 3v5h5", compartir: "M12 15V3M7.5 7.5L12 3l4.5 4.5M5 13v6a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-6"
 };
-/* ── Marca Setra ──────────────────────────────────────────────────────────
-   Logo fuente: marca/setra_logo1.svg. Aquí va el símbolo simplificado (marca/setra-simbolo.svg: sin brillo
-   ni filos de luz) y la palabra «SETRA» con los trazos del logo. El lema va en la letra del sistema. */
-const MARCA_GRAD = {   // [x1, y1, x2, y2] relativos a la caja de la faceta, como en el SVG
-  top: [[0, 1, 1, 0], [[0, "#103d5b"], [0.38, "#12d9d0"], [0.72, "#19c9c6"], [1, "#4775e9"]]],
-  cyan: [[0, 0, 1, 1], [[0, "#16eee0"], [0.5, "#10bfc9"], [1, "#244b91"]]],
-  blue: [[0, 0, 1, 1], [[0, "#16466a"], [0.5, "#168baf"], [1, "#625de0"]]],
-  violet: [[0, 0, 1, 1], [[0, "#1c3d70"], [0.55, "#2877a9"], [1, "#7969ec"]]],
-  lower: [[0, 0, 1, 0], [[0, "#11d9dc"], [0.52, "#148cae"], [1, "#414d9d"]]]
-};
-const MARCA_FACETAS = [   // [puntos, relleno (degradado o color), opacidad]; caja: x 153–498, y 28–456
-  [[166, 155, 498, 28, 452, 119, 241, 198], "top", 1], [[166, 155, 498, 28, 248, 173], "#16d7cf", 0.62],
-  [[248, 173, 498, 28, 452, 119, 241, 198], "#245a9a", 0.52], [[166, 155, 294, 305, 359, 281, 241, 198], "blue", 1],
-  [[166, 155, 166, 234, 294, 305], "cyan", 1], [[241, 198, 359, 281, 294, 305], "#182d57", 0.82],
-  [[294, 196, 359, 181, 484, 247, 484, 329], "violet", 1], [[359, 181, 484, 247, 484, 329], "#5369d2", 0.75],
-  [[153, 456, 198, 365, 484, 247, 414, 319], "lower", 1], [[198, 365, 484, 247, 414, 319], "#287bb1", 0.64]
-];
-const MARCA_S = "M157 542H101C82 542 82 560 101 566L138 578C157 584 157 585 138 585H82";          // se traza (grosor 19)
-const MARCA_LETRAS = "M174 532H258V551H195V554H248V572H195V575H258V594H174ZM276 532H365V551H330V594H311V551H276Z" +
-  "M382 532H464Q475 532 475 543V563Q475 574 464 574H456L480 594H453L430 574H403V594H382ZM403 551V557H453V551Z" +
-  "M495 594L520 532H546L573 594H550L545 580H519L514 594ZM526 563H539L533 546Z";                // se rellena (evenodd)
-let marcaN = 0;
-function svgSimbolo(alto) {
-  const id = "sx" + (++marcaN) + "-";
-  let defs = "";
-  for (const k in MARCA_GRAD) {
-    const [v, paradas] = MARCA_GRAD[k];
-    defs += '<linearGradient id="' + id + k + '" x1="' + v[0] + '" y1="' + v[1] + '" x2="' + v[2] + '" y2="' + v[3] + '">' +
-      paradas.map((s) => '<stop offset="' + s[0] + '" stop-color="' + s[1] + '"/>').join("") + "</linearGradient>";
-  }
-  const caras = MARCA_FACETAS.map(([pt, f, o]) => '<path d="M' + pt.join(" ") + 'Z" fill="' + (MARCA_GRAD[f] ? "url(#" + id + f + ")" : f) + '"' + (o < 1 ? ' opacity="' + o + '"' : "") + "/>").join("");
-  return '<svg width="' + Math.round(alto * 345 / 428) + '" height="' + alto + '" viewBox="153 28 345 428" aria-hidden="true"><defs>' + defs + "</defs>" + caras + "</svg>";
-}
-function svgPalabra(alto) {
-  return '<svg width="' + Math.round(alto * 496 / 64) + '" height="' + alto + '" viewBox="80 531 496 64" aria-hidden="true"><path d="' + MARCA_S +
-    '" fill="none" stroke="currentColor" stroke-width="19"/><path d="' + MARCA_LETRAS + '" fill="currentColor" fill-rule="evenodd"/></svg>';
-}
-/** Logo con lema: símbolo arriba, «SETRA» y «WORKOUT ROUTINE TRACKER». */
-function logoSetra(alto) {
-  alto = alto || 96;
-  return '<div class="logo-setra" role="img" aria-label="Setra · Workout Routine Tracker">' + svgSimbolo(alto) + svgPalabra(Math.round(alto * 0.27)) +
-    '<span class="lema" aria-hidden="true">WORKOUT ROUTINE TRACKER</span></div>';
-}
-/** Marca pequeña en las imágenes: símbolo + «SETRA». (x, yCentro) y alinear "left" | "right". */
-function marcaCanvas(c, x, yCentro, alto, alinear, color) {
-  const kS = alto / 428, altoP = alto * 0.46, kP = altoP / 64, anchoS = 345 * kS, sep = alto * 0.22, anchoP = 496 * kP;
-  const x0 = alinear === "right" ? x - anchoS - sep - anchoP : x;
-  const alfa = c.globalAlpha;
-  c.save();
-  c.translate(x0, yCentro - alto / 2); c.scale(kS, kS); c.translate(-153, -28);
-  for (const [pt, f, o] of MARCA_FACETAS) {
-    const ruta = new Path2D("M" + pt.join(" ") + "Z");
-    let relleno = f;
-    if (MARCA_GRAD[f]) {
-      const xs = pt.filter((_, i) => i % 2 === 0), ys = pt.filter((_, i) => i % 2 === 1);
-      const x1 = Math.min(...xs), y1 = Math.min(...ys), w = Math.max(...xs) - x1, h = Math.max(...ys) - y1, [v, paradas] = MARCA_GRAD[f];
-      relleno = c.createLinearGradient(x1 + v[0] * w, y1 + v[1] * h, x1 + v[2] * w, y1 + v[3] * h);
-      for (const s of paradas) relleno.addColorStop(s[0], s[1]);
-    }
-    c.globalAlpha = alfa * o; c.fillStyle = relleno; c.fill(ruta);
-  }
-  c.restore(); c.save();
-  c.translate(x0 + anchoS + sep, yCentro - altoP / 2); c.scale(kP, kP); c.translate(-80, -531);
-  c.fillStyle = c.strokeStyle = color || "#FFFFFF"; c.lineWidth = 19;
-  c.stroke(new Path2D(MARCA_S)); c.fill(new Path2D(MARCA_LETRAS), "evenodd");
-  c.restore();
-}
+/* La marca Setra (MARCA_*, logoSetra, marcaCanvas) está en el script del principio del body: la usa la pantalla de inicio. */
 function ic(n, t, grosor) {
   return '<svg width="' + (t || 20) + '" height="' + (t || 20) + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="' + (grosor || (n === "puntos" ? 3 : 2)) +
     '" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + RUTAS[n] + '"/></svg>';
@@ -3319,7 +3381,7 @@ async function dibujarTarjetaMapa(t) {
 async function compartirImagen(blob, nombre, texto) {
   const archivo = typeof File === "function" ? new File([blob], nombre, { type: "image/png" }) : null;
   if (archivo && navigator.canShare && navigator.canShare({ files: [archivo] })) {
-    await navigator.share({ files: [archivo], text: texto + "\n\n— Setra · Workout Routine Tracker" });
+    await navigator.share({ files: [archivo], text: texto + "\n\n— Setra · Tu progreso, serie a serie" });
   } else {
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = nombre;
     document.body.appendChild(a); a.click(); setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 1500);
@@ -4929,7 +4991,7 @@ setInterval(() => {
    El service worker (sw.js) guarda la app para abrir sin señal; nunca toca los datos.
    Una versión nueva espera hasta que el usuario toca «Actualizar»: antes de recargar
    se guarda todo, y una sesión en curso se retoma sola al volver. */
-const VERSION_APP = "e15e4f82d9"; /*VERSION-APP*/
+const VERSION_APP = "f3def658f9"; /*VERSION-APP*/
 /* iPhone/iPad: todos sus navegadores (Chrome incluido) usan el motor de Safari. Sin botón propio de
    instalar y, si se quita el ícono, se borran los datos. iPadOS se presenta como Mac: se reconoce por
    la pantalla táctil. El guardado y el respaldo son iguales que en Android. */
@@ -5313,7 +5375,7 @@ async function arrancar(robar) {
   let r;
   try { r = await P.iniciar({ robar: robar }); }
   catch (e) { console.error(e); r = { ok: true, estado: "sin-almacenamiento" }; }
-  if (r.estado === "otra-pestana") { bloqueo(); return; }
+  if (r.estado === "otra-pestana") { bloqueo(); quitarArranque(true); return; }
   if (r.recuperado) setTimeout(() => toast("Se recuperó lo último que anotaste antes de cerrar"), 400);
   if (r.estado === "sin-almacenamiento") estado = L.documentoNuevo();
   else if (r.estado === "nuevo") { if (!estado) { estado = L.documentoNuevo(); await P.guardarLocal(); } }
@@ -5324,6 +5386,7 @@ async function arrancar(robar) {
   try { history.replaceState({ vista: "inicio", params: {} }, ""); } catch (e) {}
   if (darBienvenida) { ui.paso = 1; ir("bienvenida", {}, true); }
   else if (enCurso && ui.vista !== "rescate") ir("sesion", { id: enCurso.id }); else render(true);
+  quitarArranque(ui.vista === "rescate");      // rescate: sin esperar el mínimo
   avisoMigracion();
   revisarCompartida();
   await pedirPersistencia();
